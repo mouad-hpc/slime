@@ -39,5 +39,5 @@ def log_checkpoint(checkpoint_dir, metadata=None):
     _manager.log_checkpoint(checkpoint_dir, metadata=metadata)
 
 
-def finish_tracking():
+def finish_tracking(args=None):
     _manager.finish()
