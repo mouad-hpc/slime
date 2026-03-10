@@ -957,6 +957,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
+        def add_lora_arguments(parser):
+            """Add LoRA-related arguments for Megatron backend."""
+            parser.add_argument("--lora-rank", type=int, default=0)
+            parser.add_argument("--lora-alpha", type=int, default=16)
+            parser.add_argument("--lora-dropout", type=float, default=0.0)
+            parser.add_argument("--lora-type", type=str, default="lora", choices=["lora", "canonical_lora"])
+            parser.add_argument("--target-modules", type=str, default=None)
+            parser.add_argument("--exclude-modules", type=str, default=None)
+            parser.add_argument("--lora-adapter-path", type=str, default=None)
+            parser.add_argument("--lora-sync-from-tensor", action="store_true", default=False)
+            return parser
+
         def add_on_policy_distillation_arguments(parser):
             """Add on-policy distillation (OPD) related arguments.
 
@@ -1412,6 +1424,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_data_arguments(parser)
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
+        parser = add_lora_arguments(parser)
         parser = add_on_policy_distillation_arguments(parser)
         parser = add_wandb_arguments(parser)
         parser = add_mlflow_arguments(parser)
@@ -1620,6 +1633,20 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
+
+    # Parse LoRA target modules
+    if args.lora_rank > 0:
+        assert args.target_modules is not None, "'--target-modules' is required when LoRA is enabled."
+        if args.target_modules == "all-linear":
+            modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        elif "," in args.target_modules:
+            modules = [m.strip() for m in args.target_modules.split(",")]
+        else:
+            modules = [args.target_modules]
+        if args.exclude_modules:
+            exclude_set = set(m.strip() for m in args.exclude_modules.split(",")) if "," in args.exclude_modules else {args.exclude_modules}
+            modules = [m for m in modules if m not in exclude_set]
+        args.target_modules = modules
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 

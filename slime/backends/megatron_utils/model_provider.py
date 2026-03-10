@@ -62,8 +62,13 @@ def get_model_provider_func(
     if getattr(args, "custom_model_provider_path", None):
 
         def wrapped_model_provider(
-            pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None
+            pre_process: bool = True,
+            post_process: bool = True,
+            vp_stage: int | None = None,
+            config: TransformerConfig | None = None,
+            pg_collection=None,
         ) -> GPTModel:
+            assert config is None, "slime builds the config from args, so it expects config to be None"
             custom_model_provider = load_function(args.custom_model_provider_path)
             # Check if the custom provider supports vp_stage parameter
             has_vp_stage = "vp_stage" in inspect.signature(custom_model_provider).parameters
@@ -96,24 +101,30 @@ def get_model_provider_func(
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
         provider.finalize()
-        return provider.provide
 
-    def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
-        """Builds the model.
+        def wrapped_bridge_provider(
+            pre_process: bool = True,
+            post_process: bool = True,
+            vp_stage: int | None = None,
+            config: TransformerConfig | None = None,
+            pg_collection=None,
+        ) -> GPTModel:
+            assert config is None, "slime builds the config from args, so it expects config to be None"
+            return provider.provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
 
-        If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
+        return wrapped_bridge_provider
 
-        Args:
-            pre_process (bool, optional): Set to true if you need to compute embedings. Defaults to True.
-            post_process (bool, optional): Set to true if you need to want to compute output logits/loss. Defaults to True.
-
-
-        Returns:
-            Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
-        """
+    def model_provider(
+        pre_process: bool = True,
+        post_process: bool = True,
+        vp_stage: int | None = None,
+        config: TransformerConfig | None = None,
+        pg_collection=None,
+    ) -> GPTModel:
+        """Builds the model."""
+        assert config is None, "slime builds the config from args, so it expects config to be None"
         use_te = args.transformer_impl == "transformer_engine"
 
-        # Experimental loading arguments from yaml
         config: TransformerConfig = core_transformer_config_from_args(args)
 
         if args.spec is not None:
@@ -209,7 +220,7 @@ def get_model_provider_func(
 
 
 def wrap_model_provider_with_freeze(original_provider, args):
-    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None):
+    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None, config=None, pg_collection=None):
         sig = inspect.signature(original_provider)
         if "vp_stage" in sig.parameters:
             model = original_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
