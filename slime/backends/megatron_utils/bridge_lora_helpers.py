@@ -6,12 +6,15 @@ forward / backward / optimizer logic.
 
 from __future__ import annotations
 
+import logging
 from argparse import Namespace
 from dataclasses import dataclass
 
 from megatron.core.utils import get_attr_wrapped_model
 
 from .lora_utils import create_lora_instance
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,6 +66,92 @@ def _get_model_config_from_wrapped(model):
     return get_attr_wrapped_model(model, "config", allow_none=False)
 
 
+_qwen35_bridges_registered = False
+
+
+def _register_qwen35_bridges():
+    """Register Qwen3.5 model architectures with megatron-bridge.
+
+    Standard megatron-bridge does not know about Qwen3.5. The coding-famer
+    fork (``coding-famer/Megatron-Bridge-slime@qwen35``) adds native support,
+    but if that fork is not installed we fall back to aliasing Qwen3.5 to the
+    closest existing Qwen3 VL bridges so ``AutoBridge.from_hf_pretrained``
+    can at least resolve the architecture.
+    """
+    global _qwen35_bridges_registered
+    if _qwen35_bridges_registered:
+        return
+    _qwen35_bridges_registered = True
+
+    try:
+        from megatron.bridge.models.conversion.model_bridge import (
+            get_model_bridge,
+            register_bridge_implementation,
+        )
+    except ImportError:
+        return
+
+    registry = getattr(get_model_bridge, "_exact_types", {})
+
+    # Dense VLM (e.g. Qwen3.5-4B)
+    _try_register(
+        registry,
+        register_bridge_implementation,
+        arch_name="Qwen3_5ForConditionalGeneration",
+        bridge_module="megatron.bridge.models.qwen_vl.qwen3_vl_bridge",
+        bridge_class_name="Qwen3VLBridge",
+        target_module="megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model",
+        target_class_name="Qwen3VLModel",
+    )
+
+    # MoE VLM (e.g. Qwen3.5-35B-A3B)
+    _try_register(
+        registry,
+        register_bridge_implementation,
+        arch_name="Qwen3_5MoeForConditionalGeneration",
+        bridge_module="megatron.bridge.models.qwen_vl.qwen3_vl_bridge",
+        bridge_class_name="Qwen3VLMoEBridge",
+        target_module="megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model",
+        target_class_name="Qwen3VLModel",
+    )
+
+
+def _try_register(registry, register_fn, *, arch_name, bridge_module, bridge_class_name, target_module, target_class_name):
+    """Register a single architecture if not already present."""
+    import importlib
+
+    # Check both string and class keys
+    already = arch_name in registry
+    if not already:
+        try:
+            import transformers
+            cls = getattr(transformers, arch_name, None)
+            if cls is not None:
+                already = cls in registry
+        except Exception:
+            pass
+
+    if already:
+        logger.debug("%s already registered in megatron-bridge", arch_name)
+        return
+
+    try:
+        bridge_mod = importlib.import_module(bridge_module)
+        bridge_cls = getattr(bridge_mod, bridge_class_name)
+        target_mod = importlib.import_module(target_module)
+        target_cls = getattr(target_mod, target_class_name)
+    except (ImportError, AttributeError) as exc:
+        logger.warning(
+            "Cannot register %s: %s bridge not available (%s). "
+            "Install the coding-famer Megatron-Bridge fork for Qwen3.5 support.",
+            arch_name, bridge_class_name, exc,
+        )
+        return
+
+    register_fn(source=arch_name, target=target_cls, bridge_class=bridge_cls)
+    logger.info("Registered %s → %s (target=%s)", arch_name, bridge_class_name, target_class_name)
+
+
 def _setup_lora_model_via_bridge(args: Namespace) -> list:
     """Build Megatron model with LoRA using Megatron-Bridge.
 
@@ -83,6 +172,11 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
     from transformers import AutoConfig
 
     hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+    # Qwen3.5 models are not natively registered in megatron-bridge.
+    # Register them with existing Qwen3 VL bridges before calling AutoBridge.
+    _register_qwen35_bridges()
+
     bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
     provider = bridge.to_megatron_provider(load_weights=False)
 
