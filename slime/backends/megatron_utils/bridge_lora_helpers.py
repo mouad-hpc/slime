@@ -152,12 +152,12 @@ def _try_register(registry, register_fn, *, arch_name, bridge_module, bridge_cla
     logger.info("Registered %s → %s (target=%s)", arch_name, bridge_class_name, target_class_name)
 
 
-def _patch_missing_rope_theta(bridge):
-    """Ensure text_config.rope_theta exists for bridges that read it directly.
+def _patch_qwen35_config(bridge):
+    """Patch Qwen3.5 text_config for compatibility with Qwen3 VL bridges.
 
-    Qwen3.5 stores the value inside ``rope_parameters`` instead of as a
-    top-level attribute, which causes an AttributeError in the Qwen3 VL
-    bridge's ``provider_bridge``.
+    Qwen3.5 configs differ from Qwen3 VL in two ways:
+    1. ``rope_theta`` is nested inside ``rope_parameters`` instead of top-level.
+    2. MoE variants lack ``intermediate_size`` (the bridge reads it for ffn_hidden_size).
     """
     hf_config = getattr(bridge, "hf_pretrained", None)
     if hf_config is None:
@@ -169,7 +169,13 @@ def _patch_missing_rope_theta(bridge):
         rope_params = getattr(text_config, "rope_parameters", None)
         if rope_params and "rope_theta" in rope_params:
             text_config.rope_theta = rope_params["rope_theta"]
-            logger.info("Patched text_config.rope_theta = %s from rope_parameters", text_config.rope_theta)
+            logger.info("Patched text_config.rope_theta = %s", text_config.rope_theta)
+
+    if not hasattr(text_config, "intermediate_size"):
+        fallback = getattr(text_config, "shared_expert_intermediate_size", None) or getattr(text_config, "moe_intermediate_size", None)
+        if fallback is not None:
+            text_config.intermediate_size = fallback
+            logger.info("Patched text_config.intermediate_size = %s", fallback)
 
 
 def _setup_lora_model_via_bridge(args: Namespace) -> list:
@@ -201,7 +207,7 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
 
     # Qwen3.5 stores rope_theta inside rope_parameters, but the Qwen3 VL bridge
     # reads it as a top-level attribute on text_config.  Patch it through.
-    _patch_missing_rope_theta(bridge)
+    _patch_qwen35_config(bridge)
 
     provider = bridge.to_megatron_provider(load_weights=False)
 
