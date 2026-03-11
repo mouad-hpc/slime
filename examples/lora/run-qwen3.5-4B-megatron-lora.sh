@@ -6,16 +6,26 @@ export PYTHONBUFFERED=16
 # Install Qwen3.5 bridge support
 pip install -U transformers
 pip install git+https://github.com/coding-famer/Megatron-Bridge-slime.git@qwen35 --no-build-isolation
+pip install nvidia-cudnn-cu12==9.16.0.29
 
 # Clean up stale processes
-pkill sglang
-ray stop --force
-sleep 5
 pkill -9 sglang
+sleep 3
+ray stop --force
+pkill -9 ray
+pkill -9 python
+sleep 3
 pkill -9 ray
 pkill -9 python
 
 set -ex
+
+NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
+if [ "$NVLINK_COUNT" -gt 0 ]; then
+    HAS_NVLINK=1
+else
+    HAS_NVLINK=0
+fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/../../scripts/models/qwen3.5-4B.sh"
@@ -62,11 +72,17 @@ PERF_ARGS=(
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
-   --expert-model-parallel-size 1
-   --expert-tensor-parallel-size 1
+
+   --recompute-granularity full
+   --recompute-method uniform
+   --recompute-num-layers 1
 
    --use-dynamic-batch-size
    --max-tokens-per-gpu 9216
+
+   # Packing is not supported for GDN currently
+   --qkv-format bshd
+   --micro-batch-size 1
 )
 
 GRPO_ARGS=(
@@ -86,6 +102,10 @@ OPTIMIZER_ARGS=(
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
+
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
 )
 
 MLFLOW_ARGS=(
@@ -97,6 +117,7 @@ MLFLOW_ARGS=(
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    --offload-train
 )
 
@@ -108,19 +129,22 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-ray start --head --node-ip-address 127.0.0.1 --num-gpus $GPUS_PER_NODE --disable-usage-stats
+export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
+export no_proxy="127.0.0.1,${MASTER_ADDR}"
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus $GPUS_PER_NODE --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+
+RUNTIME_ENV_JSON="{
+  \"env_vars\": {
+    \"PYTHONPATH\": \"/root/Megatron-LM/\",
+    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
+    \"SGLANG_DISABLE_CUDNN_CHECK\": \"1\",
+    \"no_proxy\": \"${no_proxy}\"
+  }
+}"
 
 ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{
-     "env_vars": {
-        "PYTHONPATH": "/root/Megatron-LM",
-        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-        "NCCL_ALGO": "Ring",
-        "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
-        "SGLANG_DISABLE_CUDNN_CHECK": "1"
-     }
-   }' \
+   --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node $GPUS_PER_NODE \
