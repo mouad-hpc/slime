@@ -116,7 +116,8 @@ ray job submit --address="http://127.0.0.1:8265" \
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
         "NCCL_ALGO": "Ring",
         "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-        "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "SGLANG_DISABLE_CUDNN_CHECK": "1"
      }
    }' \
    -- python3 train.py \
