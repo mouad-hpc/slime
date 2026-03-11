@@ -152,6 +152,26 @@ def _try_register(registry, register_fn, *, arch_name, bridge_module, bridge_cla
     logger.info("Registered %s → %s (target=%s)", arch_name, bridge_class_name, target_class_name)
 
 
+def _patch_missing_rope_theta(bridge):
+    """Ensure text_config.rope_theta exists for bridges that read it directly.
+
+    Qwen3.5 stores the value inside ``rope_parameters`` instead of as a
+    top-level attribute, which causes an AttributeError in the Qwen3 VL
+    bridge's ``provider_bridge``.
+    """
+    hf_config = getattr(bridge, "hf_pretrained", None)
+    if hf_config is None:
+        return
+    hf_config = getattr(hf_config, "config", hf_config)
+    text_config = getattr(hf_config, "text_config", hf_config)
+
+    if not hasattr(text_config, "rope_theta"):
+        rope_params = getattr(text_config, "rope_parameters", None)
+        if rope_params and "rope_theta" in rope_params:
+            text_config.rope_theta = rope_params["rope_theta"]
+            logger.info("Patched text_config.rope_theta = %s from rope_parameters", text_config.rope_theta)
+
+
 def _setup_lora_model_via_bridge(args: Namespace) -> list:
     """Build Megatron model with LoRA using Megatron-Bridge.
 
@@ -178,6 +198,11 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
     _register_qwen35_bridges()
 
     bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+    # Qwen3.5 stores rope_theta inside rope_parameters, but the Qwen3 VL bridge
+    # reads it as a top-level attribute on text_config.  Patch it through.
+    _patch_missing_rope_theta(bridge)
+
     provider = bridge.to_megatron_provider(load_weights=False)
 
     provider.tensor_model_parallel_size = args.tensor_model_parallel_size
