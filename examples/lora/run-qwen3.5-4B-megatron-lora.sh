@@ -3,11 +3,6 @@ export FLASHINFER_DISABLE_VERSION_CHECK=1
 export GPUS_PER_NODE=8
 export PYTHONBUFFERED=16
 
-# Install Qwen3.5 bridge support
-pip install -U transformers
-pip install git+https://github.com/coding-famer/Megatron-Bridge-slime.git@qwen35 --no-build-isolation
-pip install nvidia-cudnn-cu12==9.16.0.29
-
 # Clean up stale processes
 pkill -9 sglang
 sleep 3
