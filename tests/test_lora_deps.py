@@ -10,6 +10,11 @@ import sys
 def test_core_imports():
     """Test that all core slime + LoRA modules import cleanly."""
     print("Testing core imports...")
+    import os
+    os.environ.setdefault("PYTHONPATH", "/root/Megatron-LM")
+    import sys
+    if "/root/Megatron-LM" not in sys.path:
+        sys.path.insert(0, "/root/Megatron-LM")
     import slime
     from slime.utils.arguments import parse_args
     from slime.backends.megatron_utils.lora_utils import (
@@ -28,14 +33,16 @@ def test_core_imports():
 def test_bridge_imports():
     """Test megatron-bridge with Qwen3.5 support."""
     print("Testing bridge imports...")
-    from megatron_bridge import AutoBridge
+    from megatron.bridge import AutoBridge
     # Check Qwen3.5 is registered
-    from megatron_bridge.bridge.registry import BRIDGE_REGISTRY
-    qwen35_found = any("qwen3" in k.lower() or "qwen3_5" in k.lower() for k in BRIDGE_REGISTRY)
+    try:
+        from megatron.bridge.models.registry import BRIDGE_REGISTRY
+        qwen35_found = any("qwen3" in k.lower() or "qwen3_5" in k.lower() for k in BRIDGE_REGISTRY)
+    except ImportError:
+        qwen35_found = False
     if not qwen35_found:
-        # Try alternate check
         try:
-            from megatron_bridge.bridge.qwen3_5 import Qwen35Bridge
+            from megatron.bridge.models.qwen3_5 import Qwen35Bridge
             qwen35_found = True
         except ImportError:
             pass
@@ -49,7 +56,7 @@ def test_mlflow():
     """Test MLflow import and basic functionality."""
     print("Testing MLflow...")
     import mlflow
-    from slime.utils.mlflow_utils import setup_mlflow
+    from slime.utils.tracking.mlflow_utils import setup_mlflow
     print(f"  MLflow version: {mlflow.__version__}")
     print("  OK: MLflow")
 
@@ -104,12 +111,21 @@ def test_cudnn_version():
     print("Testing CuDNN version...")
     try:
         import nvidia.cudnn as cudnn
-        version = cudnn.__version__
-        major, minor = int(version.split(".")[0]), int(version.split(".")[1])
+        version = getattr(cudnn, "__version__", None)
+        if version is None:
+            # Newer cudnn packages use version() or _version
+            version = getattr(cudnn, "version", lambda: "unknown")
+            if callable(version):
+                version = version()
+        print(f"  CuDNN version: {version}")
+        # Try pip package version as fallback
+        import importlib.metadata
+        pip_version = importlib.metadata.version("nvidia-cudnn-cu12")
+        major, minor = int(pip_version.split(".")[0]), int(pip_version.split(".")[1])
         if major > 9 or (major == 9 and minor >= 15):
-            print(f"  OK: CuDNN {version}")
+            print(f"  OK: nvidia-cudnn-cu12=={pip_version}")
         else:
-            print(f"  WARNING: CuDNN {version} < 9.15 — SGLang may fail")
+            print(f"  WARNING: nvidia-cudnn-cu12=={pip_version} < 9.15 — SGLang may fail")
     except ImportError:
         print("  SKIP: nvidia.cudnn not importable (expected on non-GPU host)")
 
