@@ -95,8 +95,9 @@ MLFLOW_ARGS=(
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.4
+   --rollout-num-gpus-per-engine 8
+   --sglang-mem-fraction-static 0.7
+   --offload-train
 )
 
 MISC_ARGS=(
