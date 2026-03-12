@@ -70,6 +70,9 @@ class UpdateWeightFromTensor:
         self._ipc_gather_src = None
         self._ipc_engine = None
         self._model_update_groups = None
+        # CUDA IPC tensors must stay alive until all SGLang TP schedulers
+        # finish deserializing.  We keep them until the next update_weights().
+        self._prev_ipc_tensors = None
 
     def connect_rollout_engines(
         self,
@@ -151,6 +154,11 @@ class UpdateWeightFromTensor:
         """
         version++, flush caches, process buckets. Progress on rank 0.
         """
+        # Free CUDA IPC tensors from the previous sync.  By now a full
+        # training step has elapsed, so all SGLang TP schedulers have
+        # definitely finished deserializing the old handles.
+        self._prev_ipc_tensors = None
+
         self.weight_version += 1
 
         rank = dist.get_rank()
@@ -173,9 +181,6 @@ class UpdateWeightFromTensor:
             refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
             results = ray.get(refs)
             _check_weight_sync_results(results, is_lora=self.is_lora)
-            # Keep CUDA tensors alive until all SGLang TP schedulers finish
-            # deserializing via CUDA IPC. ray.get() only waits for the HTTP
-            # response, not for every TP worker to complete deserialization.
             all_long_lived_tensors.append(long_lived_tensors)
             sync_chunk_count += 1
 
@@ -198,9 +203,13 @@ class UpdateWeightFromTensor:
                 )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
-        # Safe to free CUDA IPC tensors now — all TP schedulers have finished
-        # processing weights (continue_generation acts as the barrier).
-        del all_long_lived_tensors
+
+        # Keep CUDA IPC tensors alive until the NEXT update_weights() call.
+        # SGLang TP schedulers are separate processes that deserialize CUDA
+        # IPC handles asynchronously — continue_generation is NOT a barrier
+        # for all schedulers.  Storing on self ensures the underlying CUDA
+        # memory stays valid through the entire rollout phase.
+        self._prev_ipc_tensors = all_long_lived_tensors
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []
@@ -290,16 +299,8 @@ def _send_to_colocated_engine(
     serialized_tensors = []
     for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
         flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-        flattened_tensor = flattened_tensor_bucket.get_flattened_tensor()
-        # LoRA adapters are serialized once and broadcast by SGLang to all TP
-        # schedulers (separate OS processes).  CUDA IPC handles become invalid
-        # if the source tensor is freed before every scheduler finishes
-        # deserializing, and there is no cross-scheduler barrier to wait on.
-        # Moving small LoRA tensors to CPU avoids CUDA IPC entirely.
-        if is_lora:
-            flattened_tensor = flattened_tensor.cpu()
         flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor,
+            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
             "metadata": flattened_tensor_bucket.get_metadata(),
         }
         long_live_tensors.append(flattened_tensor_data)
