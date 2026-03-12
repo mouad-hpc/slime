@@ -16,6 +16,14 @@ from .lora_utils import create_lora_instance
 
 logger = logging.getLogger(__name__)
 
+# Register LinearCrossEntropyModule (fused output layer in newer Megatron-Core)
+# with the bridge's weight mapping so it knows it's column-parallel.
+try:
+    from megatron.bridge.models.conversion.param_mapping import AutoMapping
+    AutoMapping.register_module_type("LinearCrossEntropyModule", "column")
+except (ImportError, AttributeError):
+    pass
+
 
 @dataclass
 class _BridgeWrapperConfig:
