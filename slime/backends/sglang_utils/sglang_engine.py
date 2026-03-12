@@ -430,6 +430,39 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response
 
+    def load_lora_adapter_from_tensors(
+        self,
+        lora_name: str,
+        serialized_tensors: str,
+        config_dict: dict,
+        load_format: str | None = None,
+        pinned: bool = False,
+        added_tokens_config: dict | None = None,
+    ):
+        """Load a LoRA adapter from serialized tensor data."""
+        payload = {
+            "lora_name": lora_name,
+            "serialized_tensors": serialized_tensors,
+            "config_dict": config_dict,
+            "pinned": pinned,
+        }
+        if load_format is not None:
+            payload["load_format"] = load_format
+        if added_tokens_config is not None:
+            payload["added_tokens_config"] = added_tokens_config
+
+        return self._make_request(
+            "load_lora_adapter_from_tensors",
+            payload,
+        )
+
+    def unload_lora_adapter(self, lora_name: str):
+        """Unload LoRA adapter."""
+        return self._make_request(
+            "unload_lora_adapter",
+            {"lora_name": lora_name},
+        )
+
     def post_process_weights(
         self,
         restore_weights_before_load: bool = False,
