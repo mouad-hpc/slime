@@ -168,11 +168,15 @@ class UpdateWeightFromTensor:
         megatron_local_weights = self.weights_getter()
 
         sync_chunk_count = 0
+        all_long_lived_tensors = []
         for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
             refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
             results = ray.get(refs)
             _check_weight_sync_results(results, is_lora=self.is_lora)
-            del long_lived_tensors
+            # Keep CUDA tensors alive until all SGLang TP schedulers finish
+            # deserializing via CUDA IPC. ray.get() only waits for the HTTP
+            # response, not for every TP worker to complete deserialization.
+            all_long_lived_tensors.append(long_lived_tensors)
             sync_chunk_count += 1
 
         if self.is_lora and sync_chunk_count == 0:
@@ -194,6 +198,9 @@ class UpdateWeightFromTensor:
                 )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
+        # Safe to free CUDA IPC tensors now — all TP schedulers have finished
+        # processing weights (continue_generation acts as the barrier).
+        del all_long_lived_tensors
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []
