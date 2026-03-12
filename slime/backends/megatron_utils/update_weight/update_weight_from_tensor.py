@@ -290,8 +290,16 @@ def _send_to_colocated_engine(
     serialized_tensors = []
     for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
         flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+        flattened_tensor = flattened_tensor_bucket.get_flattened_tensor()
+        # LoRA adapters are serialized once and broadcast by SGLang to all TP
+        # schedulers (separate OS processes).  CUDA IPC handles become invalid
+        # if the source tensor is freed before every scheduler finishes
+        # deserializing, and there is no cross-scheduler barrier to wait on.
+        # Moving small LoRA tensors to CPU avoids CUDA IPC entirely.
+        if is_lora:
+            flattened_tensor = flattened_tensor.cpu()
         flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+            "flattened_tensor": flattened_tensor,
             "metadata": flattened_tensor_bucket.get_metadata(),
         }
         long_live_tensors.append(flattened_tensor_data)
