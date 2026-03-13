@@ -463,7 +463,6 @@ class RolloutManager:
         start_time = time.time()
         self.rollout_id = rollout_id
         self.health_monitoring_resume()
-        self._router_resume_health_checks()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
@@ -484,7 +483,6 @@ class RolloutManager:
             # if debug train only, we don't generate evaluation data
             return
         self.health_monitoring_resume()
-        self._router_resume_health_checks()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         # Pause health checks before returning to training loop
