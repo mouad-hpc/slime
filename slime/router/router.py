@@ -41,6 +41,8 @@ class SlimeRouter:
         # Quarantined workers excluded from routing pool
         self.dead_workers: set[str] = set()
         self.max_weight_version = None
+        # When True, health check loop skips checking (used during memory offload transitions)
+        self._health_checks_paused = False
 
         max_connections = getattr(args, "slime_router_max_connections", None)
         if max_connections is None:
@@ -69,6 +71,9 @@ class SlimeRouter:
         self.app.post("/add_worker")(self.add_worker)
         self.app.get("/list_workers")(self.list_workers)
         self.app.post("/retrieve_from_text")(self.retrieve_from_text)
+        # Health check pause/resume (used during memory offload transitions)
+        self.app.post("/pause_health_checks")(self.pause_health_checks)
+        self.app.post("/resume_health_checks")(self.resume_health_checks)
         # Catch-all route for proxying to SGLang - must be registered LAST
         self.app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])(self.proxy)
 
@@ -94,6 +99,9 @@ class SlimeRouter:
         while True:
             try:
                 await asyncio.sleep(interval)
+
+                if self._health_checks_paused:
+                    continue
 
                 urls = [u for u in self.worker_request_counts if u not in self.dead_workers]
                 if not urls:
@@ -199,6 +207,23 @@ class SlimeRouter:
     async def list_workers(self, request: Request):
         """List all registered workers"""
         return {"urls": list(self.worker_request_counts.keys())}
+
+    async def pause_health_checks(self, request: Request):
+        """Pause health checks during memory offload transitions."""
+        self._health_checks_paused = True
+        logger.info("[slime-router] Health checks paused (memory offload in progress)")
+        return {"status": "paused"}
+
+    async def resume_health_checks(self, request: Request):
+        """Resume health checks after memory onload, clearing stale failure state."""
+        revived = list(self.dead_workers)
+        self.dead_workers.clear()
+        self.worker_failure_counts = {url: 0 for url in self.worker_failure_counts}
+        self._health_checks_paused = False
+        if revived:
+            logger.info(f"[slime-router] Revived {len(revived)} workers marked dead during offload: {revived}")
+        logger.info("[slime-router] Health checks resumed")
+        return {"status": "resumed", "revived_workers": revived}
 
     async def retrieve_from_text(self, request: Request):
         """Get token information from text input"""
