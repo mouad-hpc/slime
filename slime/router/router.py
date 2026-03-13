@@ -69,6 +69,7 @@ class SlimeRouter:
         """Setup all the HTTP routes"""
         # sglang-router api
         self.app.post("/add_worker")(self.add_worker)
+        self.app.post("/remove_worker")(self.remove_worker)
         self.app.get("/list_workers")(self.list_workers)
         self.app.post("/retrieve_from_text")(self.retrieve_from_text)
         # Health check pause/resume (used during memory offload transitions)
@@ -195,14 +196,40 @@ class SlimeRouter:
                 status_code=400, content={"error": "worker_url is required (use query ?url=... or JSON body)"}
             )
 
-        # Add if new, keep a simple request count per worker
-        if worker_url not in self.worker_request_counts:
-            self.worker_request_counts[worker_url] = 0
-            self.worker_failure_counts[worker_url] = 0
-            if self.verbose:
-                print(f"[slime-router] Added new worker: {worker_url}")
+        is_new = worker_url not in self.worker_request_counts
+        self.worker_request_counts.setdefault(worker_url, 0)
+        self.worker_failure_counts[worker_url] = 0
+        self.dead_workers.discard(worker_url)
+
+        if is_new and self.verbose:
+            print(f"[slime-router] Added new worker: {worker_url}")
+        if not is_new:
+            logger.info(f"[slime-router] Re-registered worker {worker_url}, cleared dead/failure state")
 
         return {"status": "success", "worker_urls": self.worker_request_counts}
+
+    async def remove_worker(self, request: Request):
+        """Remove a worker from the router.
+        Supports providing the URL via query string or JSON body.
+        """
+        worker_url = request.query_params.get("url") or request.query_params.get("worker_url")
+
+        if not worker_url:
+            body = await request.body()
+            payload = json.loads(body) if body else {}
+            worker_url = payload.get("url") or payload.get("worker_url")
+
+        if not worker_url:
+            return JSONResponse(
+                status_code=400, content={"error": "worker_url is required (use query ?url=... or JSON body)"}
+            )
+
+        self.worker_request_counts.pop(worker_url, None)
+        self.worker_failure_counts.pop(worker_url, None)
+        self.dead_workers.discard(worker_url)
+        logger.info(f"[slime-router] Removed worker: {worker_url}")
+
+        return {"status": "success"}
 
     async def list_workers(self, request: Request):
         """List all registered workers"""
@@ -255,13 +282,11 @@ class SlimeRouter:
             url = min(self.worker_request_counts, key=self.worker_request_counts.get)
         else:
             # Degraded path: select from workers not in dead_workers
-            valid_workers = {w: c for w, c in self.worker_request_counts.items() if w not in self.dead_workers}
-            if valid_workers:
-                url = min(valid_workers, key=valid_workers.get)
-            else:
-                # All workers marked dead — try them anyway (may have recovered after offload)
-                logger.warning("[slime-router] All workers marked dead, attempting request on dead workers")
-                url = min(self.worker_request_counts, key=self.worker_request_counts.get)
+            valid_workers = (w for w in self.worker_request_counts if w not in self.dead_workers)
+            try:
+                url = min(valid_workers, key=self.worker_request_counts.get)
+            except ValueError:
+                raise RuntimeError("No healthy workers available in the pool") from None
 
         self.worker_request_counts[url] += 1
         return url
