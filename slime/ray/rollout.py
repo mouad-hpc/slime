@@ -564,7 +564,8 @@ class RolloutManager:
             if srv.router_ip and srv.router_port:
                 url = f"http://{srv.router_ip}:{srv.router_port}/pause_health_checks"
                 try:
-                    _requests.post(url, json={}, timeout=5)
+                    resp = _requests.post(url, json={}, timeout=5)
+                    logger.info(f"Router pause_health_checks {url} -> {resp.status_code}")
                 except Exception as e:
                     logger.warning(f"Failed to pause router health checks at {url}: {e}")
 
@@ -577,6 +578,7 @@ class RolloutManager:
                 url = f"http://{srv.router_ip}:{srv.router_port}/resume_health_checks"
                 try:
                     resp = _requests.post(url, json={}, timeout=5)
+                    logger.info(f"Router resume_health_checks {url} -> {resp.status_code}")
                     data = resp.json()
                     if data.get("revived_workers"):
                         logger.info(f"Router revived workers after offload: {data['revived_workers']}")

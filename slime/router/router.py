@@ -42,7 +42,8 @@ class SlimeRouter:
         self.dead_workers: set[str] = set()
         self.max_weight_version = None
         # When True, health check loop skips checking (used during memory offload transitions)
-        self._health_checks_paused = False
+        # Start paused — resume_health_checks is called at the start of generate()/eval()
+        self._health_checks_paused = True
 
         max_connections = getattr(args, "slime_router_max_connections", None)
         if max_connections is None:
