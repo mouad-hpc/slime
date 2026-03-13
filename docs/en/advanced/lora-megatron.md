@@ -1,13 +1,13 @@
 # LoRA Fine-Tuning with Megatron Backend
 
-LoRA (Low-Rank Adaptation) support for dense and MoE models via the Megatron training backend, ported from miles PRs #409/#684.
+LoRA (Low-Rank Adaptation) support for dense and MoE models via the Megatron training backend, ported from miles PRs #409/#684 (pending SGLang #20371)
 
 ## Architecture & Dependency Tree
 
 ```
-slime (this repo)
+limes
 ├── Megatron-LM (Osmosis-AI/Megatron-LM@miles-main)
-│   └── Has `from miles.xxx` imports → resolved via symlink to slime
+│   └── Has `from miles.xxx` imports → resolved via symlink to slime (later limes)
 ├── Megatron-Bridge (Osmosis-AI/Megatron-Bridge@merged-qwen35-lora)
 │   ├── HF ↔ Megatron weight conversion
 │   └── export_adapter_weights() — LoRA weight gathering for SGLang sync
@@ -16,7 +16,7 @@ slime (this repo)
 │   ├── Memory saver (release/resume_memory_occupation)
 │   └── Patched: hf_text_config for composite models
 ├── torch_memory_saver
-│   └── CPU backup/restore of GPU training tensors during offload
+│   └── CPU backup/restore of GPU training tensors during offload (TEMP UNTIL SGLANG ISSUE IS RESOLVED)
 └── transformers >= 5.2.0
     └── Native qwen3_5_moe model type
 ```
@@ -31,7 +31,7 @@ During training, LoRA adapter weights are synced from Megatron training GPUs to 
 4. **Load**: SGLang calls `load_lora_adapter_from_tensors` to hot-load the adapter
 5. **Offload safety**: Base model weights preserved via `enable_weights_cpu_backup` during offload cycles
 
-The full-model weight sync path (`update_weights_from_tensor`) is skipped for LoRA — only adapter weights (typically <1% of parameters) are transferred.
+The full-model weight sync path (`update_weights_from_tensor`) is skipped for LoRA only adapter weights are transferred.
 
 ## Key Fixes
 
@@ -39,11 +39,11 @@ Bugs discovered and fixed during testing on Qwen3.5-27B (dense) and Qwen3.5-35B-
 
 | Bug | Root Cause | Fix | File |
 |---|---|---|---|
-| Gibberish rollouts after 1st iteration | `enable_weights_cpu_backup` missing — base weights destroyed on `release_memory_occupation` | Add `"enable_weights_cpu_backup": args.offload_rollout` | `sglang_engine.py` |
+| Corrupted rollouts after 1st iteration | `enable_weights_cpu_backup` missing with base weights destroyed on `release_memory_occupation` | Add `"enable_weights_cpu_backup": args.offload_rollout` | `sglang_engine.py` |
 | CUDA IPC race condition | IPC tensors freed before SGLang TP workers could deserialize them | Store as `self._prev_ipc_tensors`, free at next `update_weights` | `update_weight_from_tensor.py` |
-| Router marks workers DEAD during training | Health checks run while workers are under GPU memory pressure → false positives | Start health checks paused, never resume (router = pure load balancer) | `router.py` |
+| Router marks workers DEAD during training | Health checks run while workers are under GPU memory pressure → false positives | Start health checks paused, never resume| `router.py` |
 | SGLang LoRA crash on MoE models | `LoRAManager` receives composite `hf_config` → missing `num_hidden_layers` | `sed` patch: `hf_config` → `hf_text_config` | Dockerfile |
-| EAGLE spec decoding + LoRA crash | SGLang only supports NGRAM spec decoding with LoRA | Documented constraint, use NGRAM only | `sglang_engine.py` |
+| EAGLE spec decoding + LoRA crash | SGLang only supports NGRAM spec decoding with LoRA | Documented constraint on SGLang repo, use NGRAM only | `sglang_engine.py` |
 
 ## Usage
 
@@ -63,13 +63,13 @@ docker build -f docker/Dockerfile.qwen35-lora -t slimerl/slime:qwen35-lora .
 ### Key Arguments
 
 ```bash
---lora-rank 32              # LoRA rank (0 = disabled)
---lora-alpha 16             # LoRA alpha scaling
---lora-dropout 0.0          # Dropout on LoRA layers
---lora-type lora            # "lora" or "canonical_lora"
---target-modules all-linear  # Target modules (comma-separated or "all-linear")
---exclude-modules ""        # Modules to skip
---lora-adapter-path /path   # Pre-trained adapter to resume from
+--lora-rank 32              
+--lora-alpha 16             
+--lora-dropout 0.0          
+--lora-type lora           
+--target-modules all-linear  
+--exclude-modules ""        
+--lora-adapter-path /path   
 ```
 
 ### MLflow Tracking
@@ -77,20 +77,17 @@ docker build -f docker/Dockerfile.qwen35-lora -t slimerl/slime:qwen35-lora .
 Experiments are logged to MLflow when `--tracking mlflow` is set:
 
 ```bash
-# Inside container
 python3 -m mlflow ui --host 0.0.0.0 --port 5000
 
-# SSH tunnel from local machine
 ssh -L 5000:<container-ip>:5000 -N user@host
 ```
 
-## Known Limitations
+## CURRENT Known Limitations
 
 - **MoE LoRA targets non-expert layers only**: SGLang doesn't yet support LoRA on expert FFN layers. Adapters target attention (QKV, O) and shared expert layers.
 - **Speculative decoding**: Only NGRAM is compatible with LoRA. EAGLE/MTP spec decoding will crash.
 - **Router health checks disabled**: Router operates as a pure load balancer with no dead worker detection. `RolloutHealthMonitor` handles fault tolerance separately at the Ray level.
-- **Reward parsing**: `--rm-type math` expects `\boxed{X}` format. Model output format may need prompt engineering to match.
-- **Distributed (non-colocated) LoRA sync**: Not yet implemented. LoRA weight sync only works with colocated engines (`--colocate`).
+- **Distributed LoRA sync**: Not yet implemented. LoRA weight sync only works with colocated engines (`--colocate`).
 
 ## File Reference
 
