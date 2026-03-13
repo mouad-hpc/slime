@@ -467,6 +467,10 @@ class RolloutManager:
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+        # Pause health checks before returning to training loop — workers may become
+        # temporarily unresponsive during training (GPU memory pressure) or weight updates.
+        self.health_monitoring_pause()
+        self._router_pause_health_checks()
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
         _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
@@ -483,6 +487,9 @@ class RolloutManager:
         self._router_resume_health_checks()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
+        # Pause health checks before returning to training loop
+        self.health_monitoring_pause()
+        self._router_pause_health_checks()
         data = result.data
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
         _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
