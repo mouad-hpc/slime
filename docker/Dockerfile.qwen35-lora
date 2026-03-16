@@ -60,6 +60,9 @@ RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@1bc80bb0d6
 # Megatron-Bridge: Osmosis-AI merged fork with native Qwen3.5 bridges + LoRA export_adapter_weights
 # Based on coding-famer/qwen35 (Qwen3.5 bridge) + export_adapter_weights for LoRA weight sync
 RUN pip install git+https://github.com/Osmosis-AI/Megatron-Bridge.git@merged-qwen35-lora --no-deps --no-build-isolation
+# Stub: merged-qwen35-lora references mla_provider (from upstream rebase) but doesn't include it.
+# Qwen3.5 isn't MLA so a stub class satisfies the issubclass check.
+RUN echo 'class MLAModelProvider:\n    pass' > $(python3 -c "import megatron.bridge.models; print(megatron.bridge.models.__path__[0])")/mla_provider.py
 
 RUN pip install nvidia-modelopt[torch]>=0.42.0 --no-build-isolation
 
