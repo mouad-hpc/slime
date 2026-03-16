@@ -56,6 +56,7 @@ SHARED_ARGS=(
 
    --eval-interval 10
    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
+   --eval-input-key prompt
    --n-samples-per-eval-prompt 1
    --eval-max-response-len 1024
    --eval-top-k 1
