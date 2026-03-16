@@ -38,6 +38,9 @@ class TrackingBackend(ABC):
     def log_checkpoint(self, checkpoint_dir: str, metadata: dict | None = None) -> None:
         """Log checkpoint metadata as artifacts. Optional — defaults to no-op."""
 
+    def log_model_params(self, total_params: int, trainable_params: int) -> None:
+        """Log model parameter counts as tags. Optional — defaults to no-op."""
+
     @abstractmethod
     def finish(self) -> None:
         ...
@@ -111,6 +114,11 @@ class MlflowBackend(TrackingBackend):
 
         mlflow_utils.log_checkpoint(checkpoint_dir, metadata=metadata)
 
+    def log_model_params(self, total_params: int, trainable_params: int) -> None:
+        from . import mlflow_utils
+
+        mlflow_utils.log_model_params(total_params, trainable_params)
+
     def finish(self) -> None:
         from . import mlflow_utils
 
@@ -151,6 +159,10 @@ class TrackingManager:
     def log_checkpoint(self, checkpoint_dir: str, metadata: dict | None = None) -> None:
         for backend in self._backends:
             backend.log_checkpoint(checkpoint_dir, metadata=metadata)
+
+    def log_model_params(self, total_params: int, trainable_params: int) -> None:
+        for backend in self._backends:
+            backend.log_model_params(total_params, trainable_params)
 
     def finish(self) -> None:
         for backend in self._backends:

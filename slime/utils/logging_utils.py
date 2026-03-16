@@ -39,5 +39,9 @@ def log_checkpoint(checkpoint_dir, metadata=None):
     _manager.log_checkpoint(checkpoint_dir, metadata=metadata)
 
 
+def log_model_params(total_params, trainable_params):
+    _manager.log_model_params(total_params, trainable_params)
+
+
 def finish_tracking(args=None):
     _manager.finish()

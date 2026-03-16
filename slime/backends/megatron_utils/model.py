@@ -805,6 +805,21 @@ def initialize_model_and_optimizer(
     )
     clear_memory()
 
+    if (mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+            and mpu.get_tensor_model_parallel_rank() == 0
+            and mpu.is_pipeline_last_stage()):
+        total = sum(p.numel() for m in model for p in m.parameters())
+        trainable = sum(p.numel() for m in model for p in m.parameters() if p.requires_grad)
+        logger.info("Model params: total=%s, trainable=%s (%.4f%%)", total, trainable, 100.0 * trainable / total if total else 0)
+        param_log = {
+            "model/total_params": total,
+            "model/trainable_params": trainable,
+            "model/trainable_ratio": trainable / total if total > 0 else 0.0,
+            "train/step": 0,
+        }
+        logging_utils.log(args, param_log, step_key="train/step")
+        logging_utils.log_model_params(total, trainable)
+
     opt_param_scheduler.step(increment=iteration * args.global_batch_size)
 
     return model, optimizer, opt_param_scheduler, iteration

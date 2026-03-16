@@ -81,6 +81,17 @@ def _init_mlflow_primary(args, experiment_name: str) -> None:
         tags["slurm_job_id"] = slurm_job_id
     tags["rank"] = str(args.rank)
 
+    lora_rank = getattr(args, "lora_rank", 0)
+    if lora_rank > 0:
+        tags["training.method"] = "lora"
+        tags["lora.rank"] = str(lora_rank)
+        tags["lora.alpha"] = str(getattr(args, "lora_alpha", 16))
+        target = getattr(args, "target_modules", None)
+        tags["lora.target_modules"] = ",".join(target) if isinstance(target, list) else str(target)
+    else:
+        tags["training.method"] = "full_ft"
+    tags["model.name"] = getattr(args, "model_name", None) or "unknown"
+
     run = mlflow.start_run(run_name=run_name, tags=tags)
     mlflow.log_params(_compute_config_for_logging(args))
 
@@ -103,6 +114,18 @@ def _init_mlflow_secondary(args) -> None:
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
+
+def log_model_params(total_params: int, trainable_params: int) -> None:
+    import mlflow
+
+    if mlflow.active_run() is None:
+        return
+    mlflow.set_tags({
+        "model.total_params": str(total_params),
+        "model.trainable_params": str(trainable_params),
+        "model.trainable_ratio": f"{trainable_params / total_params:.6f}" if total_params > 0 else "0",
+    })
+
 
 def log_metrics(metrics: dict[str, Any], step: int | None = None) -> None:
     import mlflow
