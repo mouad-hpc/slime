@@ -55,7 +55,7 @@ SHARED_ARGS=(
    --global-batch-size 128
 
    --eval-interval 10
-   --eval-prompt-data gsm8k /root/gsm8k/test.parquet
+   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 1
    --eval-max-response-len 1024
    --eval-top-k 1
