@@ -51,13 +51,16 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
   --no-build-isolation \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@f199212da7234bf9be2244cad5b9bfa2f5fe2675
 
-# Pin to pre-upgrade commit: 038e8e5a2 ("Upgrade Megatron from Dec 17 to Feb 13")
-# added experimental_attention_variant assertion incompatible with Megatron-Bridge's
-# qwen35_vl_provider. Use parent commit 07220d28f until Bridge is updated.
-ARG MEGATRON_COMMIT=07220d28fc024f8455b58a03874acf5bc62adb27
+# Megatron-LM: Osmosis-AI fork (miles-main)
+# Patch: remove experimental_attention_variant assertion in gpt_layer_specs.py.
+# Bridge's qwen35_vl_provider sets experimental_attention_variant="gated_delta_net"
+# then calls get_gpt_decoder_block_spec() which rejects non-None variants.
+# The Bridge handles hybrid GDN/attention layers manually via _patch_standard_attention_specs
+# so the assertion just blocks a valid code path. Fix properly upstream in Megatron-Bridge.
 RUN git clone -b ${MEGATRON_BRANCH} https://github.com/${MEGATRON_REPO}.git Megatron-LM --recursive && \
     cd Megatron-LM && \
-    git checkout ${MEGATRON_COMMIT} && \
+    sed -i '/assert config\.experimental_attention_variant is None/,/^    )/d' \
+        megatron/core/models/gpt/gpt_layer_specs.py && \
     pip install -e .
 
 RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@1bc80bb0d63db3b6af34b6c5e6139cf470fe1fcc --no-cache-dir --force-reinstall
@@ -80,7 +83,7 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install -r /tmp/requirements.txt
 
 # Qwen3.5 requires native config support (qwen3_5_moe model type)
-RUN pip install "transformers>=5.2.0"
+RUN pip install "transformers>=5.3.0"
 
 # MLflow for experiment tracking (--ignore-installed blinker for debian conflict)
 RUN pip install mlflow --ignore-installed blinker
@@ -102,7 +105,7 @@ RUN rm -rf /root/.cache/pip /root/flash-attention
 
 # ====================================== Patches ============================================
 
-# Megatron-LM patch removed: Osmosis-AI/Megatron-LM@miles-main already includes all fixes.
+# Megatron-LM assertion patch applied inline during clone (see above).
 
 # TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
 ARG ENABLE_SGLANG_PATCH=1
