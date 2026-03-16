@@ -475,13 +475,24 @@ def grade_answer_mathd(given_answer: str, ground_truth: str) -> bool:
     return False
 
 
+def _looks_numeric(s: str) -> bool:
+    """Return True if *s* looks like a numeric answer (integer, decimal, fraction, latex math)."""
+    s = s.strip().rstrip(".")
+    return bool(re.match(r'^[-+]?[\d\s.,/\\fracdcpi{}^()+*×÷]+$', s))
+
+
 def extract_answer(passage: str) -> str:
     if "\\boxed" in passage:
         return extract_boxed_answer(passage)
-    # Fallback: extract last bold markdown answer like **48** or **\frac{1}{2}**
+    # Fallback 1: bold markdown that looks like a number, e.g. **48** or **\frac{1}{2}**
     bold_matches = re.findall(r"\*\*([^*]+)\*\*", passage)
-    if bold_matches:
-        return bold_matches[-1].strip()
+    numeric_bolds = [m.strip() for m in bold_matches if _looks_numeric(m)]
+    if numeric_bolds:
+        return numeric_bolds[-1]
+    # Fallback 2: last standalone number in the passage
+    number_matches = re.findall(r'(?<![a-zA-Z])(\d[\d,]*\.?\d*)(?![a-zA-Z])', passage)
+    if number_matches:
+        return number_matches[-1].replace(",", "")
     return None
 
 
