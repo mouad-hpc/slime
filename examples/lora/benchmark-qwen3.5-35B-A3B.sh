@@ -157,6 +157,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${MODEL_ARGS[@]} \
    ${SHARED_ARGS[@]} \
    --mlflow-run-name lora-r32-benchmark \
+   --lr 1e-4 \
    --lora-rank 32 \
    --lora-alpha 32 \
    --lora-dropout 0.0 \
