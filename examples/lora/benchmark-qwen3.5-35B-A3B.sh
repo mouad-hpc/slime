@@ -157,7 +157,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${SHARED_ARGS[@]} \
    --mlflow-run-name lora-r32-benchmark \
    --offload-train \
-   --lr 1e-4 \
+   --lr 5e-5 \
+   --clip-grad 1.0 \
    --lora-rank 32 \
    --lora-alpha 32 \
    --lora-dropout 0.0 \
