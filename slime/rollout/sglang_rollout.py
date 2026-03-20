@@ -162,6 +162,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "return_logprob": True,
     }
 
+    if getattr(args, "lora_rank", 0) > 0:
+        from slime.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME
+
+        payload["lora_path"] = LORA_ADAPTER_NAME
+
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
