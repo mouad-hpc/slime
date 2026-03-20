@@ -133,13 +133,17 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
+        update_weight_kwargs = dict(
+            model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
+            quantization_config=getattr(self.hf_config, "quantization_config", None),
+        )
+        if self.args.colocate:
+            update_weight_kwargs["is_lora"] = is_lora_enabled(args)
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
             weights_getter=lambda: self.weights_backuper.get("actor"),
-            model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
-            quantization_config=getattr(self.hf_config, "quantization_config", None),
-            is_lora=is_lora_enabled(args),
+            **update_weight_kwargs,
         )
 
         # empty cache after initialization
