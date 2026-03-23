@@ -1,0 +1,45 @@
+# Helm values for the ARC runner scale set
+# Deploy with:
+#   helm install limes-gpu-runners \
+#     --namespace arc-runners \
+#     --create-namespace \
+#     -f infra/k8s/arc-runners-values.yaml \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set
+
+githubConfigUrl: "https://github.com/Osmosis-AI/slime-rl"
+githubConfigSecret: arc-github-secret
+
+# 1 node with 8 GPUs = 1 job at a time
+maxRunners: 1
+minRunners: 0
+
+template:
+  spec:
+    restartPolicy: Never
+    priorityClassName: default
+
+    # Required for Ray/NCCL multi-GPU communication
+    hostIPC: true
+
+    containers:
+    - name: runner
+      image: slimerl/slime:latest
+      resources:
+        limits:
+          nvidia.com/gpu: "8"
+      securityContext:
+        privileged: true
+      volumeMounts:
+      - mountPath: /dev/shm
+        name: dshm
+      - mountPath: /root/models
+        name: ci-storage
+
+    volumes:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 16Gi
+    - name: ci-storage
+      persistentVolumeClaim:
+        claimName: limes-ci-pvc
