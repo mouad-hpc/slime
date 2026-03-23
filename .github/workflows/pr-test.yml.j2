@@ -125,9 +125,7 @@ jobs:
         -e https_proxy=$https_proxy
         -e HTTP_PROXY=$HTTP_PROXY
         -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+        -v /root/models:/root/models
 <% endif %>
     strategy:
       fail-fast: false
@@ -252,9 +250,7 @@ jobs:
         -e https_proxy=$https_proxy
         -e HTTP_PROXY=$HTTP_PROXY
         -e HTTPS_PROXY=$HTTPS_PROXY
-        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/slime_ci/models:/root/models
-        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+        -v /root/models:/root/models
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.e2e-test-changed-detect.outputs.matrix) }}
