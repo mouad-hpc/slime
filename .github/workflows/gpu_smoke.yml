@@ -189,6 +189,15 @@ jobs:
           docker version
           docker info
 
+      - name: Check nvidia toolkit path
+        shell: bash
+        run: |
+          echo "=== /usr/local/nvidia/toolkit contents ==="
+          ls -la /usr/local/nvidia/toolkit/ 2>/dev/null || echo "PATH NOT FOUND"
+          echo "=== find all nvidia binaries ==="
+          find /usr/local/nvidia/ -name "nvidia-*" 2>/dev/null | head -20 || echo "no nvidia binaries found"
+          find /usr/local/nvidia/ -name "*runtime*" 2>/dev/null | head -20 || echo "no runtime binary found"
+
       - name: Pull CUDA test image
         shell: bash
         run: |
@@ -208,3 +217,4 @@ jobs:
             --ulimit stack=67108864 \
             nvidia/cuda:12.4.1-base-ubuntu22.04 \
             nvidia-smi
+
