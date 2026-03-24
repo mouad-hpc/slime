@@ -94,7 +94,8 @@ ROLLOUT_ARGS=(
    --num-rollout 531
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 16384
+   --system-prompt "Think concisely and efficiently. Provide your reasoning, then put your final answer within \\boxed{}."
    --rollout-temperature 1
 
    --global-batch-size 256
@@ -105,7 +106,7 @@ EVAL_ARGS=(
    --eval-prompt-data aime ${EVAL_DATA}
    --eval-input-key prompt
    --n-samples-per-eval-prompt 1
-   --eval-max-response-len 8192
+   --eval-max-response-len 16384
    --eval-top-k 1
 )
 
@@ -162,7 +163,7 @@ SGLANG_ARGS=(
    --sglang-ep-size 8
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
 
-   --sglang-max-running-requests 256
+   --sglang-max-running-requests 128
    --offload-train
 )
 
