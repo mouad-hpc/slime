@@ -151,7 +151,7 @@ jobs:
         run: |
           set -euxo pipefail
           docker run --rm \
-            --runtime=nvidia \ 
+            --runtime=nvidia \
             -e NVIDIA_VISIBLE_DEVICES=all \
             --ipc=host \
             --shm-size=16g \
