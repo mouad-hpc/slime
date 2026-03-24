@@ -170,6 +170,54 @@
 #           echo "=== final nvidia-smi on runner ==="
 #           nvidia-smi || true
 
+# name: gpu-smoke
+# on:
+#   workflow_dispatch:
+# jobs:
+#   gpu-smoke:
+#     name: GPU smoke test on ARC runner
+#     runs-on: limes-gpu-runners
+#     timeout-minutes: 30
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
+
+#       - name: Show Docker state
+#         shell: bash
+#         run: |
+#           set -euxo pipefail
+#           docker version
+#           docker info
+
+#       - name: Check nvidia toolkit path
+#         shell: bash
+#         run: |
+#           echo "=== /usr/local/nvidia/toolkit contents ==="
+#           ls -la /usr/local/nvidia/toolkit/ 2>/dev/null || echo "PATH NOT FOUND"
+#           echo "=== find all nvidia binaries ==="
+#           find /usr/local/nvidia/ -name "nvidia-*" 2>/dev/null | head -20 || echo "no nvidia binaries found"
+#           find /usr/local/nvidia/ -name "*runtime*" 2>/dev/null | head -20 || echo "no runtime binary found"
+
+#       - name: Pull CUDA test image
+#         shell: bash
+#         run: |
+#           set -euxo pipefail
+#           docker pull nvidia/cuda:12.4.1-base-ubuntu22.04
+
+#       - name: Run GPU container smoke test
+#         shell: bash
+#         run: |
+#           set -euxo pipefail
+#           docker run --rm \
+#             --runtime=nvidia \
+#             -e NVIDIA_VISIBLE_DEVICES=all \
+#             --ipc=host \
+#             --shm-size=16g \
+#             --ulimit memlock=-1 \
+#             --ulimit stack=67108864 \
+#             nvidia/cuda:12.4.1-base-ubuntu22.04 \
+#             nvidia-smi
+
 name: gpu-smoke
 on:
   workflow_dispatch:
@@ -182,39 +230,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show Docker state
+      - name: GPU smoke test
         shell: bash
         run: |
-          set -euxo pipefail
-          docker version
-          docker info
-
-      - name: Check nvidia toolkit path
-        shell: bash
-        run: |
-          echo "=== /usr/local/nvidia/toolkit contents ==="
-          ls -la /usr/local/nvidia/toolkit/ 2>/dev/null || echo "PATH NOT FOUND"
-          echo "=== find all nvidia binaries ==="
-          find /usr/local/nvidia/ -name "nvidia-*" 2>/dev/null | head -20 || echo "no nvidia binaries found"
-          find /usr/local/nvidia/ -name "*runtime*" 2>/dev/null | head -20 || echo "no runtime binary found"
-
-      - name: Pull CUDA test image
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker pull nvidia/cuda:12.4.1-base-ubuntu22.04
-
-      - name: Run GPU container smoke test
-        shell: bash
-        run: |
-          set -euxo pipefail
-          docker run --rm \
-            --runtime=nvidia \
-            -e NVIDIA_VISIBLE_DEVICES=all \
-            --ipc=host \
-            --shm-size=16g \
-            --ulimit memlock=-1 \
-            --ulimit stack=67108864 \
-            nvidia/cuda:12.4.1-base-ubuntu22.04 \
-            nvidia-smi
-
+          nvidia-smi
+          python -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('GPUs:', torch.cuda.device_count())"
