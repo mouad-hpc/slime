@@ -23,7 +23,7 @@ template:
 
     initContainers:
     - name: setup-runner
-      image: slimerl/slime:latest
+      image: osmosisdocker/limes:latest
       command: ["bash", "-c"]
       args:
       - |
@@ -36,7 +36,7 @@ template:
 
     containers:
     - name: runner
-      image: slimerl/slime:latest
+      image: osmosisdocker/limes:latest
       command: ["/runner-tmp/run.sh"]
       env:
       - name: RUNNER_ALLOW_RUNASROOT
