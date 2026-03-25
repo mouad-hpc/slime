@@ -42,12 +42,12 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type math "
-        "--num-rollout 3 "
+        "--num-rollout 1 "
         "--rollout-batch-size 8 "
-        "--n-samples-per-prompt 4 "
-        "--rollout-max-response-len 4096 "
+        "--n-samples-per-prompt 2 "
+        "--rollout-max-response-len 512 "
         "--rollout-temperature 0.8 "
-        "--global-batch-size 32 "
+        "--global-batch-size 8 "
         "--balance-data "
     )
 
