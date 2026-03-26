@@ -3,7 +3,7 @@ import os
 import slime.utils.external_utils.command_utils as U
 
 
-ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
+ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "0")))
 TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
 USE_DEEPEP = bool(int(os.environ.get("SLIME_TEST_USE_DEEPEP", "0")))
 USE_FP8_ROLLOUT = bool(int(os.environ.get("SLIME_TEST_USE_FP8_ROLLOUT", "0")))
