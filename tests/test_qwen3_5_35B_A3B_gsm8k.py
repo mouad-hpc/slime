@@ -32,7 +32,7 @@ def execute():
     else:
         ckpt_args = (
             f"--hf-checkpoint /root/models/{MODEL_NAME} "
-            f"--ref-load /root/{MODEL_NAME}_torch_dist "
+            "--megatron-to-hf-mode bridge "
         )
 
     rollout_args = (
