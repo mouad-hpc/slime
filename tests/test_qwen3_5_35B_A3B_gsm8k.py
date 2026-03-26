@@ -70,7 +70,7 @@ def execute():
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        f"--max-tokens-per-gpu 20480 "
+        "--max-tokens-per-gpu 20480 "
     )
 
     grpo_args = (
@@ -118,6 +118,9 @@ def execute():
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
+        "--actor-num-nodes 1 "
+        "--actor-num-gpus-per-node 8 "
+        "--colocate "
         "--moe-token-dispatcher-type flex "
     )
 
