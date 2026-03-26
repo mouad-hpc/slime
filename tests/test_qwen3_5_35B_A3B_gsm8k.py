@@ -3,7 +3,7 @@ import os
 import slime.utils.external_utils.command_utils as U
 
 
-ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "0")))
+ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
 TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
 USE_DEEPEP = bool(int(os.environ.get("SLIME_TEST_USE_DEEPEP", "0")))
 USE_FP8_ROLLOUT = bool(int(os.environ.get("SLIME_TEST_USE_FP8_ROLLOUT", "0")))
@@ -46,7 +46,7 @@ def execute():
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 2 "
         "--rollout-max-response-len 512 "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         "--global-batch-size 8 "
         "--balance-data "
     )
@@ -56,27 +56,27 @@ def execute():
         "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 4096 "
-        "--eval-top-k 1 "
+        "--eval-top-p 1 "
     )
 
     perf_args = (
-        "--tensor-model-parallel-size 4 "
+        "--tensor-model-parallel-size 2 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
-        "--context-parallel-size 2 "
+        "--context-parallel-size 1 "
         "--expert-model-parallel-size 8 "
         "--expert-tensor-parallel-size 1 "
         "--recompute-granularity full "
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 8192} "
+        f"--max-tokens-per-gpu 20480 "
     )
 
     grpo_args = (
         "--advantage-estimator grpo "
         "--use-kl-loss "
-        "--kl-loss-coef 0.001 "
+        "--kl-loss-coef 0.00 "
         "--kl-loss-type low_var_kl "
         "--entropy-coef 0.00 "
         "--eps-clip 0.2 "
@@ -97,10 +97,14 @@ def execute():
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 8 "
-        "--sglang-mem-fraction-static 0.8 "
-        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-mem-fraction-static 0.7 "
+        "--sglang-ep-size 8 "
+        "--sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256) "
+        "--sglang-speculative-algorithm EAGLE "
+        "--sglang-speculative-num-steps 2 "
+        "--sglang-speculative-eagle-topk 1 "
+        "--sglang-speculative-num-draft-tokens 3 "
         "--sglang-max-running-requests 512 "
-        "--sglang-enable-metrics "
     )
 
     if USE_DEEPEP:
@@ -114,10 +118,7 @@ def execute():
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
-        "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 8 "
-        "--colocate "
-        "--moe-token-dispatcher-type alltoall "
+        "--moe-token-dispatcher-type flex "
     )
 
     train_args = (
