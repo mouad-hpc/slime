@@ -95,7 +95,7 @@ ROLLOUT_ARGS=(
    --num-rollout 200
    --rollout-batch-size 16
    --n-samples-per-prompt 8
-   --rollout-max-response-len 4096
+   --rollout-max-response-len 12288
    --system-prompt "Think concisely and efficiently. Provide your reasoning, then put your final answer within \\boxed{}."
    --rollout-temperature 1
 
