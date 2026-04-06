@@ -558,17 +558,24 @@ async def eval_rollout_single_dataset(
     pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
     for coro in asyncio.as_completed(tasks):
         sample = await coro
-        if do_print:
-            logger.info(
-                "eval_rollout_single_dataset example data: "
-                f"{[str(sample.prompt) + sample.response]} "
-                f"reward={sample.reward}"
-            )
-            do_print = False
         if isinstance(sample, list):
             data.extend(sample)
+            logged_sample = sample[-1] if sample else None
         else:
             data.append(sample)
+            logged_sample = sample
+
+        if do_print:
+            if logged_sample:
+                logger.info(
+                    "eval_rollout_single_dataset example data: "
+                    f"{[str(logged_sample.prompt) + logged_sample.response]} "
+                    f"reward={logged_sample.reward}"
+                )
+                do_print = False
+            else:
+                logger.warning("eval_rollout_single_dataset is missing sample data")
+
         pbar.update(1)
     pbar.close()
 
