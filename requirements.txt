@@ -1,18 +1,20 @@
-accelerate
-blobfile
-datasets
-httpx[http2]
-mcp[cli]
-memray  # needed for debugging (but is lightweight), we can put it to dev mode when using pyproject.toml
-numba
-omegaconf
-pillow
-pylatexenc
-pyyaml
-qwen_vl_utils # for VLM
-ray[default]
-ring_flash_attn
-sglang-router>=0.2.3
-tensorboard
-transformers
-wandb
+accelerate==1.13.0
+blobfile==3.2.0
+datasets==4.8.4
+flash-linear-attention==0.4.1
+httpx[http2]==0.28.1
+mcp[cli]==1.27.0
+memray==1.19.2
+numba==0.65.0
+omegaconf==2.3.0
+pillow==12.2.0
+pylatexenc==2.10
+pyyaml==6.0.3
+qwen_vl_utils==0.0.14
+ray[default]==2.54.1
+ring_flash_attn==0.1.8
+sglang-router==0.3.2
+tensorboard==2.20.0
+# Qwen3.5 requires native config support (qwen3_5_moe model type)
+transformers==5.3.0
+wandb==0.25.1
