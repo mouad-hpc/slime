@@ -116,10 +116,26 @@ def run_layer_parity(args):
     fused_loss = fused_out.float().square().mean()
     fused_loss.backward()
 
-    print("forward_max_abs_diff", (baseline_out - fused_out).abs().max().item())
-    print("hidden_grad_max_abs_diff", (baseline_hidden_grad - hidden_states.grad).abs().max().item())
-    print("w1_grad_max_abs_diff", (baseline_w1_grad - w1.grad).abs().max().item())
-    print("w2_grad_max_abs_diff", (baseline_w2_grad - w2.grad).abs().max().item())
+    def report(name, baseline, fused):
+        abs_diff = (baseline - fused).abs().max().item()
+        denom = baseline.abs().max().item()
+        rel_diff = abs_diff / max(denom, 1e-6)
+        status = "PASS" if rel_diff < 0.05 else "WARN" if rel_diff < 0.20 else "FAIL"
+        print(f"  {name}: abs={abs_diff:.2f}  rel={rel_diff:.4f}  [{status}]")
+        return status
+
+    print("Parity results (abs = max absolute diff, rel = abs/max_baseline):")
+    s1 = report("forward", baseline_out, fused_out)
+    s2 = report("hidden_grad", baseline_hidden_grad, hidden_states.grad)
+    s3 = report("w1_grad", baseline_w1_grad, w1.grad)
+    s4 = report("w2_grad", baseline_w2_grad, w2.grad)
+    statuses = [s1, s2, s3, s4]
+    if "FAIL" in statuses:
+        print("\nVERDICT: FAIL — relative diff > 20%, likely a bug")
+    elif "WARN" in statuses:
+        print("\nVERDICT: WARN — relative diff 5-20%, check SiluAndMul precision")
+    else:
+        print("\nVERDICT: PASS — all within 5% relative tolerance")
 
 
 def parse_args():
