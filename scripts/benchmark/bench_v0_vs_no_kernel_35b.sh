@@ -33,11 +33,12 @@ if [ ! -f /root/Qwen3.5-35B-A3B/config.json ]; then
     python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3.5-35B-A3B', local_dir='/root/Qwen3.5-35B-A3B')"
 fi
 
-# Download gsm8k data if not present
-if [ ! -f /root/gsm8k/train.parquet ]; then
-    echo "Downloading gsm8k..."
-    mkdir -p /root/gsm8k
-    python3 -c "from datasets import load_dataset; ds = load_dataset('openai/gsm8k', 'main'); ds['train'].to_parquet('/root/gsm8k/train.parquet')"
+# Prepare gsm8k data in chat format (requires 'messages' column)
+# If parquet exists but lacks 'messages' column, re-generate it
+if [ ! -f /root/gsm8k/train.parquet ] || ! python3 -c "import pandas as pd; df = pd.read_parquet('/root/gsm8k/train.parquet'); assert 'messages' in df.columns" 2>/dev/null; then
+    echo "Preparing gsm8k (chat format)..."
+    rm -f /root/gsm8k/train.parquet /root/gsm8k/test.parquet
+    python3 examples/lora/prep_gsm8k.py
 fi
 
 export PYTHONBUFFERED=16
