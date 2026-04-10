@@ -88,6 +88,8 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --micro-batch-size 1
+   # GDN (hybrid Mamba) does not support packed sequences
+   --qkv-format bshd
 )
 
 GRPO_ARGS=(
