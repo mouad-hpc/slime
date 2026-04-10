@@ -398,13 +398,12 @@ spec:
             --recompute-num-layers 1 \
             --qkv-format bshd \
             --micro-batch-size 1 \
-            --advantage-estimator grpo \
-            --kl-loss-coef 0.01 \
+            --advantage-estimator gspo \
+            --kl-loss-coef 0.00 \
             --kl-loss-type low_var_kl \
             --kl-coef 0.00 \
             --entropy-coef 0.00 \
-            --eps-clip 0.2 \
-            --eps-clip-high 0.28 \
+            --eps-clip 4e-4 \
             --optimizer adam \
             --lr 5e-5 \
             --clip-grad 1.0 \
