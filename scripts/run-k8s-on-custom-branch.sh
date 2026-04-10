@@ -378,13 +378,13 @@ spec:
             --num-rollout 100 \
             --rollout-batch-size 16 \
             --n-samples-per-prompt 8 \
-            --rollout-max-response-len 8192 \
+            --rollout-max-response-len 10240 \
             --rollout-temperature 1 \
             --global-batch-size 128 \
             --eval-interval 10 \
             --eval-prompt-data gsm8k ${TEST_DATA} \
             --n-samples-per-eval-prompt 1 \
-            --eval-max-response-len 8192 \
+            --eval-max-response-len 10240 \
             --eval-top-k 1 \
             --skip-eval-before-train \
             --tensor-model-parallel-size 2 \
