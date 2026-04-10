@@ -20,6 +20,11 @@ set -e
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/../../scripts/models/qwen3.5-35B-A3B.sh"
 
+LORA_MOE_TOKEN_DISPATCHER_TYPE="${LORA_MOE_TOKEN_DISPATCHER_TYPE:-alltoall}"
+LORA_MOE_ENABLE_DEEPEP="${LORA_MOE_ENABLE_DEEPEP:-0}"
+BASELINE_MOE_TOKEN_DISPATCHER_TYPE="${BASELINE_MOE_TOKEN_DISPATCHER_TYPE:-flex}"
+BASELINE_MOE_ENABLE_DEEPEP="${BASELINE_MOE_ENABLE_DEEPEP:-0}"
+
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
@@ -141,12 +146,17 @@ start_ray() {
 # ============================================================
 echo ""
 echo "============================================================"
-echo "  Phase 1/2: LoRA r=32 ($NUM_ROLLOUT rollout steps)"
+echo "  Phase 1/2: LoRA r=32 ($NUM_ROLLOUT rollout steps, dispatcher=${LORA_MOE_TOKEN_DISPATCHER_TYPE})"
 echo "============================================================"
 echo ""
 
 cleanup
 start_ray
+
+LORA_EXTRA_ARGS=()
+if [ "${LORA_MOE_ENABLE_DEEPEP}" = "1" ]; then
+    LORA_EXTRA_ARGS+=(--moe-enable-deepep)
+fi
 
 set -x
 ray job submit --address="http://127.0.0.1:8265" \
@@ -155,16 +165,19 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${MODEL_ARGS[@]} \
    ${SHARED_ARGS[@]} \
    --mlflow-run-name lora-r32-benchmark \
+   --moe-token-dispatcher-type "${LORA_MOE_TOKEN_DISPATCHER_TYPE}" \
    --offload-train \
    --lr 5e-5 \
    --clip-grad 1.0 \
    --lora-rank 32 \
    --lora-alpha 32 \
    --lora-dropout 0.0 \
-   --target-modules "all-linear"
+   --target-modules "all-linear" \
+   ${LORA_EXTRA_ARGS[@]}
 set +x
 
 LORA_EXIT=$?
+
 echo "==> LoRA run exited with code $LORA_EXIT"
 
 # ============================================================
@@ -172,12 +185,17 @@ echo "==> LoRA run exited with code $LORA_EXIT"
 # ============================================================
 echo ""
 echo "============================================================"
-echo "  Phase 2/2: Full Fine-Tuning ($NUM_ROLLOUT rollout steps)"
+echo "  Phase 2/2: Full Fine-Tuning ($NUM_ROLLOUT rollout steps, dispatcher=${BASELINE_MOE_TOKEN_DISPATCHER_TYPE})"
 echo "============================================================"
 echo ""
 
 cleanup
 start_ray
+
+BASELINE_EXTRA_ARGS=()
+if [ "${BASELINE_MOE_ENABLE_DEEPEP}" = "1" ]; then
+    BASELINE_EXTRA_ARGS+=(--moe-enable-deepep)
+fi
 
 set -x
 ray job submit --address="http://127.0.0.1:8265" \
@@ -186,7 +204,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${MODEL_ARGS[@]} \
    ${SHARED_ARGS[@]} \
    --mlflow-run-name full-ft-benchmark \
-   --moe-token-dispatcher-type flex
+   --moe-token-dispatcher-type "${BASELINE_MOE_TOKEN_DISPATCHER_TYPE}" \
+   ${BASELINE_EXTRA_ARGS[@]}
 set +x
 
 BASELINE_EXIT=$?

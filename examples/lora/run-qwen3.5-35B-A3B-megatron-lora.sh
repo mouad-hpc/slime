@@ -25,6 +25,15 @@ fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/../../scripts/models/qwen3.5-35B-A3B.sh"
 
+# Keep the historical defaults, but make routing and packing explicit so
+# dispatcher A/Bs do not require editing this script.
+MOE_TOKEN_DISPATCHER_TYPE="${MOE_TOKEN_DISPATCHER_TYPE:-alltoall}"
+MOE_ENABLE_DEEPEP="${MOE_ENABLE_DEEPEP:-0}"
+ENABLE_DYNAMIC_BATCH_SIZE="${ENABLE_DYNAMIC_BATCH_SIZE:-0}"
+MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-}"
+LOG_PROBS_MAX_TOKENS_PER_GPU="${LOG_PROBS_MAX_TOKENS_PER_GPU:-}"
+USE_ALLGATHER_CP="${USE_ALLGATHER_CP:-0}"
+
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3.5-35B-A3B/
    --megatron-to-hf-mode bridge
@@ -131,8 +140,27 @@ MISC_ARGS=(
    --accumulate-allreduce-grads-in-fp32
    --attention-softmax-in-fp32
    --attention-backend flash
-   --moe-token-dispatcher-type alltoall
+   --moe-token-dispatcher-type "${MOE_TOKEN_DISPATCHER_TYPE}"
 )
+
+if [ "${MOE_ENABLE_DEEPEP}" = "1" ]; then
+   MISC_ARGS+=(--moe-enable-deepep)
+fi
+
+if [ "${ENABLE_DYNAMIC_BATCH_SIZE}" = "1" ]; then
+   if [ -z "${MAX_TOKENS_PER_GPU}" ]; then
+      echo "MAX_TOKENS_PER_GPU must be set when ENABLE_DYNAMIC_BATCH_SIZE=1" >&2
+      exit 1
+   fi
+   PERF_ARGS+=(--use-dynamic-batch-size --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU}")
+   if [ -n "${LOG_PROBS_MAX_TOKENS_PER_GPU}" ]; then
+      PERF_ARGS+=(--log-probs-max-tokens-per-gpu "${LOG_PROBS_MAX_TOKENS_PER_GPU}")
+   fi
+fi
+
+if [ "${USE_ALLGATHER_CP}" = "1" ]; then
+   PERF_ARGS+=(--allgather-cp)
+fi
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
