@@ -1,10 +1,12 @@
 """LoRA utilities for Megatron backend using Megatron-Bridge PEFT integration."""
 
+import importlib.metadata
 import json
 import logging
 import os
 from argparse import Namespace
 from collections.abc import Sequence
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +114,89 @@ def _materialize_tensor_for_safetensors(tensor: torch.Tensor) -> torch.Tensor:
     # for fused projections (for example gate_proj/up_proj). safetensors rejects shared
     # storage for dict saves, so each key needs its own contiguous CPU buffer.
     return tensor.detach().to(device="cpu", copy=True).contiguous()
+
+
+def _dedupe_preserve_order(modules: Sequence[str]) -> list[str]:
+    """Return modules without duplicates while preserving their original order."""
+    deduped: list[str] = []
+    for module in modules:
+        if module not in deduped:
+            deduped.append(module)
+    return deduped
+
+
+def _jsonify_config_value(value: Any) -> Any:
+    """Normalize values to the JSON-compatible shapes PEFT configs expect."""
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, set):
+        return sorted(_jsonify_config_value(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _jsonify_config_value(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonify_config_value(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def _get_optional_peft_version() -> str | None:
+    """Return the installed PEFT version if available."""
+    try:
+        return importlib.metadata.version("peft")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _resolve_base_model_name_or_path(args: Namespace) -> str | None:
+    """Resolve the most portable base model identifier available for adapter metadata."""
+    explicit = getattr(args, "base_model_name_or_path", None)
+    if explicit:
+        return explicit
+
+    hf_checkpoint = getattr(args, "hf_checkpoint", None)
+    if hf_checkpoint is None:
+        return None
+
+    checkpoint_path = Path(hf_checkpoint)
+    if not checkpoint_path.is_dir():
+        return hf_checkpoint
+
+    config_path = checkpoint_path / "config.json"
+    if config_path.exists():
+        try:
+            config_json = json.loads(config_path.read_text())
+        except json.JSONDecodeError:
+            config_json = {}
+
+        for key in ("base_model_name_or_path", "_name_or_path", "name_or_path", "model_name_or_path"):
+            value = config_json.get(key)
+            if isinstance(value, str) and value and value != hf_checkpoint:
+                return value
+
+    return hf_checkpoint
+
+
+def _resolve_revision(args: Namespace) -> str | None:
+    """Resolve adapter revision metadata when available."""
+    revision = getattr(args, "revision", None)
+    if revision:
+        return revision
+    return None
+
+
+def _resolve_modules_arg_to_hf(
+    modules: str | Sequence[str] | None,
+    *,
+    lora_type: type | object | None,
+) -> list[str] | None:
+    """Resolve an arbitrary module list/string to canonical HF module names."""
+    normalized_modules = _normalize_target_modules_arg(modules)
+    if normalized_modules is None:
+        return None
+
+    megatron_modules = convert_target_modules_to_megatron(normalized_modules, lora_type=lora_type)
+    return _dedupe_preserve_order(convert_target_modules_to_hf(megatron_modules))
 
 
 # ---------------------------------------------------------------------------
@@ -265,37 +350,119 @@ def _get_default_hf_target_modules() -> list[str]:
 
 def resolve_target_modules_to_hf(args: Namespace) -> list[str]:
     """Resolve args.target_modules to canonical HF module names for saved/runtime configs."""
-    target_modules = _normalize_target_modules_arg(getattr(args, "target_modules", None))
-    if target_modules is None:
-        return _get_default_hf_target_modules()
-
-    megatron_modules = convert_target_modules_to_megatron(
-        target_modules,
+    target_modules = _resolve_modules_arg_to_hf(
+        getattr(args, "target_modules", None),
         lora_type=getattr(args, "lora_type", None),
     )
-    return convert_target_modules_to_hf(megatron_modules)
+    if target_modules is None:
+        return _get_default_hf_target_modules()
+    return target_modules
+
+
+def resolve_exclude_modules_to_hf(args: Namespace) -> list[str] | None:
+    """Resolve args.exclude_modules to canonical HF module names for PEFT metadata."""
+    return _resolve_modules_arg_to_hf(
+        getattr(args, "exclude_modules", None),
+        lora_type=getattr(args, "lora_type", None),
+    )
+
+
+def _build_fallback_peft_lora_config(args: Namespace) -> dict[str, Any]:
+    """Build a PEFT-compatible LoRA config without requiring peft at runtime."""
+    config = {
+        "alora_invocation_tokens": None,
+        "alpha_pattern": {},
+        "arrow_config": None,
+        "auto_mapping": None,
+        "base_model_name_or_path": _resolve_base_model_name_or_path(args),
+        "bias": "none",
+        "corda_config": None,
+        "ensure_weight_tying": False,
+        "eva_config": None,
+        "exclude_modules": resolve_exclude_modules_to_hf(args),
+        "fan_in_fan_out": False,
+        "inference_mode": True,
+        "init_lora_weights": True,
+        "layer_replication": None,
+        "layers_pattern": None,
+        "layers_to_transform": None,
+        "loftq_config": {},
+        "lora_alpha": args.lora_alpha,
+        "lora_bias": False,
+        "lora_dropout": args.lora_dropout,
+        "megatron_config": None,
+        "megatron_core": "megatron.core",
+        "modules_to_save": None,
+        "peft_type": "LORA",
+        "qalora_group_size": 16,
+        "r": args.lora_rank,
+        "rank_pattern": {},
+        "revision": _resolve_revision(args),
+        "target_modules": resolve_target_modules_to_hf(args),
+        "target_parameters": None,
+        "task_type": "CAUSAL_LM",
+        "trainable_token_indices": None,
+        "use_dora": False,
+        "use_qalora": False,
+        "use_rslora": False,
+    }
+    peft_version = _get_optional_peft_version()
+    if peft_version is not None:
+        config["peft_version"] = peft_version
+    return config
+
+
+def _build_peft_lora_config(args: Namespace) -> dict[str, Any]:
+    """Build a PEFT-style LoraConfig dict, using peft when available."""
+    target_modules = resolve_target_modules_to_hf(args)
+    exclude_modules = resolve_exclude_modules_to_hf(args)
+    base_model_name_or_path = _resolve_base_model_name_or_path(args)
+    revision = _resolve_revision(args)
+
+    try:
+        from peft import LoraConfig
+
+        config = _jsonify_config_value(
+            LoraConfig(
+                r=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                target_modules=target_modules,
+                lora_dropout=args.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                base_model_name_or_path=base_model_name_or_path,
+                inference_mode=True,
+                fan_in_fan_out=False,
+                modules_to_save=None,
+                exclude_modules=exclude_modules,
+            ).to_dict()
+        )
+    except Exception:
+        config = _build_fallback_peft_lora_config(args)
+
+    config["peft_type"] = "LORA"
+    config["r"] = args.lora_rank
+    config["lora_alpha"] = args.lora_alpha
+    config["target_modules"] = target_modules
+    config["lora_dropout"] = args.lora_dropout
+    config["bias"] = "none"
+    config["task_type"] = "CAUSAL_LM"
+    config["base_model_name_or_path"] = base_model_name_or_path
+    config["exclude_modules"] = exclude_modules
+    config["fan_in_fan_out"] = False
+    config["inference_mode"] = True
+    config["revision"] = revision
+    return config
 
 
 def build_lora_adapter_config(args: Namespace) -> dict[str, Any]:
-    """Build the shared runtime adapter config used by SGLang sync and HF export."""
-    return {
-        "peft_type": "LORA",
-        "r": args.lora_rank,
-        "lora_alpha": args.lora_alpha,
-        "target_modules": resolve_target_modules_to_hf(args),
-        "lora_dropout": args.lora_dropout,
-        "bias": "none",
-        "task_type": "CAUSAL_LM",
-    }
+    """Build the shared PEFT-style adapter config used by SGLang sync and HF export."""
+    return _build_peft_lora_config(args)
 
 
 def build_lora_saved_adapter_config(args: Namespace) -> dict[str, Any]:
     """Build adapter_config.json with the same core LoRA fields used for SGLang sync."""
-    config = build_lora_adapter_config(args)
-    if getattr(args, "hf_checkpoint", None) is not None:
-        config["base_model_name_or_path"] = args.hf_checkpoint
-    config["inference_mode"] = True
-    return config
+    return build_lora_adapter_config(args)
 
 
 def iter_exported_lora_weights(
