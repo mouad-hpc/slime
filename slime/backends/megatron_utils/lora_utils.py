@@ -1,5 +1,6 @@
 """LoRA utilities for Megatron backend using Megatron-Bridge PEFT integration."""
 
+import json
 import logging
 import os
 from argparse import Namespace
@@ -122,6 +123,8 @@ def _get_lora_class_name(lora_type: type | object | None) -> str:
     """Resolve LoRA type to its class name string."""
     if lora_type is None:
         return "CanonicalLoRA"
+    if isinstance(lora_type, str):
+        return "CanonicalLoRA" if lora_type.lower() == "canonical_lora" else "LoRA"
     if isinstance(lora_type, type):
         return lora_type.__name__
     return type(lora_type).__name__
@@ -244,6 +247,119 @@ def create_lora_instance(args: Namespace):
     return lora
 
 
+def _normalize_target_modules_arg(target_modules: str | Sequence[str] | None) -> list[str] | None:
+    """Normalize target_modules to a clean list without changing semantics."""
+    if target_modules is None:
+        return None
+    if isinstance(target_modules, str):
+        modules = [module.strip() for module in target_modules.split(",") if module.strip()]
+        return modules or None
+    modules = [str(module).strip() for module in target_modules if str(module).strip()]
+    return modules or None
+
+
+def _get_default_hf_target_modules() -> list[str]:
+    """Return the default HF module names used for LoRA adapter metadata."""
+    return ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+
+def resolve_target_modules_to_hf(args: Namespace) -> list[str]:
+    """Resolve args.target_modules to canonical HF module names for saved/runtime configs."""
+    target_modules = _normalize_target_modules_arg(getattr(args, "target_modules", None))
+    if target_modules is None:
+        return _get_default_hf_target_modules()
+
+    megatron_modules = convert_target_modules_to_megatron(
+        target_modules,
+        lora_type=getattr(args, "lora_type", None),
+    )
+    return convert_target_modules_to_hf(megatron_modules)
+
+
+def build_lora_adapter_config(args: Namespace) -> dict[str, Any]:
+    """Build the shared runtime adapter config used by SGLang sync and HF export."""
+    return {
+        "peft_type": "LORA",
+        "r": args.lora_rank,
+        "lora_alpha": args.lora_alpha,
+        "target_modules": resolve_target_modules_to_hf(args),
+        "lora_dropout": args.lora_dropout,
+        "bias": "none",
+        "task_type": "CAUSAL_LM",
+    }
+
+
+def build_lora_saved_adapter_config(args: Namespace) -> dict[str, Any]:
+    """Build adapter_config.json with the same core LoRA fields used for SGLang sync."""
+    config = build_lora_adapter_config(args)
+    if getattr(args, "hf_checkpoint", None) is not None:
+        config["base_model_name_or_path"] = args.hf_checkpoint
+    config["inference_mode"] = True
+    return config
+
+
+def iter_exported_lora_weights(
+    args: Namespace,
+    model: Sequence[torch.nn.Module],
+    *,
+    bridge: Any | None = None,
+    cpu: bool,
+    quantization_config: dict[str, Any] | None = None,
+):
+    """Yield LoRA weights in the same HF-facing form used by SGLang weight sync."""
+    from megatron.bridge import AutoBridge
+
+    from slime.utils import megatron_bridge_utils
+
+    from .megatron_to_hf import postprocess_hf_param
+    from .megatron_to_hf.processors import quantize_params
+
+    if bridge is None:
+        import slime_plugins.megatron_bridge  # noqa: F401
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+    with megatron_bridge_utils.patch_megatron_model(model):
+        for hf_name, weight, megatron_name in bridge.export_adapter_weights(
+            model,
+            cpu=cpu,
+            show_progress=False,
+        ):
+            processed_weight = postprocess_hf_param(
+                args=args,
+                megatron_param_name=megatron_name,
+                hf_param_name=hf_name,
+                param=weight,
+            )
+            yield from quantize_params(
+                args=args,
+                megatron_name=megatron_name,
+                converted_named_params=[(hf_name, processed_weight)],
+                quantization_config=quantization_config,
+            )
+
+
+def export_lora_state_dict(
+    args: Namespace,
+    model: Sequence[torch.nn.Module],
+    *,
+    bridge: Any | None = None,
+    cpu: bool,
+    quantization_config: dict[str, Any] | None = None,
+) -> dict[str, torch.Tensor]:
+    """Materialize the exported LoRA adapter as an HF-style state dict."""
+    return {
+        hf_name: weight
+        for hf_name, weight in iter_exported_lora_weights(
+            args,
+            model,
+            bridge=bridge,
+            cpu=cpu,
+            quantization_config=quantization_config,
+        )
+    }
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint save/load
 # ---------------------------------------------------------------------------
@@ -275,12 +391,6 @@ def save_lora_checkpoint(
     This function is collective: **all ranks must call it** because the bridge
     export performs TP all-gather internally. Only ``dp_rank == 0`` writes files.
     """
-    import json
-
-    from megatron.bridge import AutoBridge
-
-    from slime.utils import megatron_bridge_utils
-
     save_path = Path(save_dir)
     is_dp_rank_0 = mpu.get_data_parallel_rank() == 0
     tp_rank = mpu.get_tensor_model_parallel_rank()
@@ -304,19 +414,8 @@ def save_lora_checkpoint(
         torch.save(adapter_state, native_path)
         logger.info(f"Saved {len(adapter_state)} adapter tensors (native) to {native_path}")
 
-    # ---- HF PEFT format (uses bridge for correct name/weight conversion) ----
-    # Bridge export is collective: all TP ranks participate in the all-gather,
-    # so every rank must call export_adapter_weights.
-    bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
-
-    lora_state_dict: dict[str, torch.Tensor] = {}
-    with megatron_bridge_utils.patch_megatron_model(model):
-        for hf_name, weight, _megatron_name in bridge.export_adapter_weights(
-            model,
-            cpu=True,
-            show_progress=False,
-        ):
-            lora_state_dict[hf_name] = weight
+    # ---- HF PEFT format (uses the same export path as live SGLang sync) ----
+    lora_state_dict = export_lora_state_dict(args, model, cpu=True)
 
     # Only one rank writes the HF PEFT files (bridge already gathered across TP)
     if is_dp_rank_0 and tp_rank == 0:
@@ -326,22 +425,8 @@ def save_lora_checkpoint(
         torch.save(lora_state_dict, save_path / "adapter_model.bin")
         save_file(safetensors_state_dict, save_path / "adapter_model.safetensors")
 
-        target_modules_hf = (
-            convert_target_modules_to_hf(list(args.target_modules))
-            if args.target_modules
-            else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-        )
-        config = {
-            "peft_type": "LORA",
-            "r": args.lora_rank,
-            "lora_alpha": args.lora_alpha,
-            "target_modules": target_modules_hf,
-            "lora_dropout": args.lora_dropout,
-            "bias": "none",
-            "task_type": "CAUSAL_LM",
-        }
         with open(save_path / "adapter_config.json", "w") as f:
-            json.dump(config, f, indent=2)
+            json.dump(build_lora_saved_adapter_config(args), f, indent=2)
 
         os.sync()
         logger.info(f"Saved HF PEFT adapter to {save_path} with {len(lora_state_dict)} tensors")
@@ -468,17 +553,4 @@ def _load_training_state(
 
 def build_lora_sync_config(args: Namespace) -> dict[str, Any]:
     """Build LoRA config dict for syncing weights to SGLang engines."""
-    target_modules_hf = (
-        convert_target_modules_to_hf(list(args.target_modules))
-        if args.target_modules
-        else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    )
-    return {
-        "peft_type": "LORA",
-        "r": args.lora_rank,
-        "lora_alpha": args.lora_alpha,
-        "target_modules": target_modules_hf,
-        "lora_dropout": args.lora_dropout,
-        "bias": "none",
-        "task_type": "CAUSAL_LM",
-    }
+    return build_lora_adapter_config(args)
