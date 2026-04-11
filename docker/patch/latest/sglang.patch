@@ -1642,6 +1642,80 @@ index a9ff0ac94..c124f43bc 100644
                  (GetWeightsByNameReqInput, self.get_weights_by_name),
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
+@@ -2871,13 +2878,54 @@ class Scheduler(
+     def continue_generation(self, recv_req: ContinueGenerationReqInput):
+         self._engine_paused = False
+ 
++    def _sync_lora_update_result(
++        self, result: LoadLoRAAdapterFromTensorsReqOutput
++    ) -> LoadLoRAAdapterFromTensorsReqOutput:
++        """Wait for all TP ranks to finish a LoRA update and merge failures."""
++
++        if not (
++            torch.distributed.is_available() and torch.distributed.is_initialized()
++        ):
++            return result
++
++        tp_world_size = torch.distributed.get_world_size(group=self.tp_cpu_group)
++        if tp_world_size <= 1:
++            return result
++
++        gathered_statuses = [None] * tp_world_size
++        torch.distributed.all_gather_object(
++            gathered_statuses,
++            (result.success, result.error_message),
++            group=self.tp_cpu_group,
++        )
++
++        all_success = all(success for success, _ in gathered_statuses)
++        if all_success:
++            return result
++
++        error_messages = [
++            message
++            for success, message in gathered_statuses
++            if not success and message is not None
++        ]
++        merged_error_message = " | ".join(dict.fromkeys(error_messages))
++        if not merged_error_message:
++            merged_error_message = (
++                "One or more tensor-parallel ranks failed while updating the LoRA adapter."
++            )
++
++        return LoadLoRAAdapterFromTensorsReqOutput(
++            success=False,
++            error_message=merged_error_message,
++        )
++
+     def load_lora_adapter(
+         self, recv_req: LoadLoRAAdapterReqInput
+     ) -> LoadLoRAAdapterReqOutput:
+         """In-place loading a new lora adapter from disk or huggingface."""
+ 
+         result = self.tp_worker.load_lora_adapter(recv_req)
+-        return result
++        return self._sync_lora_update_result(result)
+ 
+     def load_lora_adapter_from_tensors(
+         self, recv_req: LoadLoRAAdapterFromTensorsReqInput
+@@ -2885,7 +2933,7 @@ class Scheduler(
+         """In-place loading a new lora adapter from serialized tensors."""
+ 
+         result = self.tp_worker.load_lora_adapter_from_tensors(recv_req)
+-        return result
++        return self._sync_lora_update_result(result)
+ 
+     def unload_lora_adapter(
+         self, recv_req: UnloadLoRAAdapterReqInput
+@@ -2893,7 +2941,7 @@ class Scheduler(
+         """Unload the lora adapter."""
+ 
+         result = self.tp_worker.unload_lora_adapter(recv_req)
+-        return result
++        return self._sync_lora_update_result(result)
+ 
+     def init_weights_send_group_for_remote_instance(
+         self, recv_req: InitWeightsSendGroupForRemoteInstanceReqInput
 diff --git a/python/sglang/srt/managers/scheduler_metrics_mixin.py b/python/sglang/srt/managers/scheduler_metrics_mixin.py
 index 30b2732b9..68090b161 100644
 --- a/python/sglang/srt/managers/scheduler_metrics_mixin.py

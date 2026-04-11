@@ -10,7 +10,7 @@
 #   - Weka PVC "weka-data" in namespace "trainers" with:
 #       /data/test-lora-gsm8k/Qwen3.5-35B-A3B  (model weights, symlink ok)
 #       /data/test-lora-gsm8k/gsm8k/{train,test}.parquet
-#   - Docker image: osmosisdocker/limes:latest (or override with IMAGE=...)
+#   - Docker image: osmosisdocker/limes:dev (or override with IMAGE=...)
 #
 set -euo pipefail
 
@@ -46,7 +46,7 @@ if (( ${#MISSING_ENV_VARS[@]} > 0 )); then
 fi
 
 NAMESPACE="trainers"
-IMAGE="${IMAGE:-osmosisdocker/limes:latest}"
+IMAGE="${IMAGE:-osmosisdocker/limes:dev}"
 JOB_NAME="local-testrun-lora-$(date +%Y%m%d-%H%M%S)"
 DRY_RUN=""
 PRIORITY_CLASS="${PRIORITY_CLASS:-skypilot-high-priority}"
