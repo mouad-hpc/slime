@@ -105,6 +105,14 @@ def _is_adapter_param_name(name: str) -> bool:
     return "lora_" in name or (".adapter." in name and ("linear_in" in name or "linear_out" in name))
 
 
+def _materialize_tensor_for_safetensors(tensor: torch.Tensor) -> torch.Tensor:
+    """Return an independent CPU tensor suitable for safetensors serialization."""
+    # Megatron-Bridge can export logical adapter tensors as views into shared storage
+    # for fused projections (for example gate_proj/up_proj). safetensors rejects shared
+    # storage for dict saves, so each key needs its own contiguous CPU buffer.
+    return tensor.detach().to(device="cpu", copy=True).contiguous()
+
+
 # ---------------------------------------------------------------------------
 # Module name conversion
 # ---------------------------------------------------------------------------
@@ -312,8 +320,11 @@ def save_lora_checkpoint(
 
     # Only one rank writes the HF PEFT files (bridge already gathered across TP)
     if is_dp_rank_0 and tp_rank == 0:
+        safetensors_state_dict = {
+            name: _materialize_tensor_for_safetensors(weight) for name, weight in lora_state_dict.items()
+        }
         torch.save(lora_state_dict, save_path / "adapter_model.bin")
-        save_file(lora_state_dict, save_path / "adapter_model.safetensors")
+        save_file(safetensors_state_dict, save_path / "adapter_model.safetensors")
 
         target_modules_hf = (
             convert_target_modules_to_hf(list(args.target_modules))
