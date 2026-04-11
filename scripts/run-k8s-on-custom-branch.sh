@@ -71,7 +71,7 @@ Environment overrides:
   SLIME_REPO_BRANCH  Branch to clone inside the pod (default: dev)
   SLIME_RUNTIME_DIR  Clone destination inside the pod (default: /root/slime-rl-runtime)
   CHECKPOINT_DIR     Checkpoint root on the mounted Weka volume
-  SAVE_INTERVAL      Save cadence in rollouts (default: 5)
+  SAVE_INTERVAL      Save cadence in rollouts (default: 1)
 EOF
 }
 
