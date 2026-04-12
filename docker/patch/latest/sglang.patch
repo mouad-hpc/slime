@@ -1642,7 +1642,7 @@ index a9ff0ac94..c124f43bc 100644
                  (GetWeightsByNameReqInput, self.get_weights_by_name),
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
-@@ -2871,13 +2878,54 @@ class Scheduler(
+@@ -2871,29 +2878,99 @@ class Scheduler(
      def continue_generation(self, recv_req: ContinueGenerationReqInput):
          self._engine_paused = False
  
@@ -1727,7 +1727,7 @@ index a9ff0ac94..c124f43bc 100644
  
      def load_lora_adapter_from_tensors(
          self, recv_req: LoadLoRAAdapterFromTensorsReqInput
-@@ -2885,7 +2933,7 @@ class Scheduler(
+     ) -> LoadLoRAAdapterFromTensorsReqOutput:
          """In-place loading a new lora adapter from serialized tensors."""
  
          result = self.tp_worker.load_lora_adapter_from_tensors(recv_req)
@@ -1736,7 +1736,7 @@ index a9ff0ac94..c124f43bc 100644
  
      def unload_lora_adapter(
          self, recv_req: UnloadLoRAAdapterReqInput
-@@ -2893,7 +2941,7 @@ class Scheduler(
+     ) -> UnloadLoRAAdapterReqOutput:
          """Unload the lora adapter."""
  
          result = self.tp_worker.unload_lora_adapter(recv_req)
