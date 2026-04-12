@@ -10,7 +10,7 @@
 #   - Weka PVC "weka-data" in namespace "trainers" with:
 #       /data/test-lora-gsm8k/Qwen3.5-35B-A3B  (model weights, symlink ok)
 #       /data/test-lora-gsm8k/gsm8k/{train,test}.parquet
-#   - Docker image: osmosisdocker/limes:latest (or override with IMAGE=...)
+#   - Docker image: osmosisdocker/limes:dev (or override with IMAGE=...)
 #
 set -euo pipefail
 
@@ -46,7 +46,7 @@ if (( ${#MISSING_ENV_VARS[@]} > 0 )); then
 fi
 
 NAMESPACE="trainers"
-IMAGE="${IMAGE:-osmosisdocker/limes:latest}"
+IMAGE="${IMAGE:-osmosisdocker/limes:dev}"
 JOB_NAME="local-testrun-lora-$(date +%Y%m%d-%H%M%S)"
 DRY_RUN=""
 PRIORITY_CLASS="${PRIORITY_CLASS:-skypilot-high-priority}"
@@ -136,6 +136,13 @@ TRAIN_DATA="${DATA_ROOT}/gsm8k/train.parquet"
 TEST_DATA="${DATA_ROOT}/gsm8k/test.parquet"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${DATA_ROOT}/checkpoints/${JOB_NAME}}"
 SAVE_INTERVAL="${SAVE_INTERVAL:-1}"
+NUM_ROLLOUT="${NUM_ROLLOUT:-100}"
+ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-16}"
+N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
+GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-128}"
+ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-10240}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-10}"
+EVAL_MAX_RESPONSE_LEN="${EVAL_MAX_RESPONSE_LEN:-10240}"
 
 MLFLOW_EXPERIMENT_NAME="${MLFLOW_EXPERIMENT_NAME:-slime-test-lora}"
 MLFLOW_RUN_NAME="${MLFLOW_RUN_NAME:-${JOB_NAME}}"
@@ -279,6 +286,12 @@ echo "    model:      ${MODEL_PATH}"
 echo "    train data: ${TRAIN_DATA}"
 echo "    save dir:   ${CHECKPOINT_DIR}"
 echo "    save every: ${SAVE_INTERVAL} rollouts"
+echo "    num rollout:${NUM_ROLLOUT}"
+echo "    rollout bs: ${ROLLOUT_BATCH_SIZE}"
+echo "    samples/pr: ${N_SAMPLES_PER_PROMPT}"
+echo "    global bs:  ${GLOBAL_BATCH_SIZE}"
+echo "    resp len:   ${ROLLOUT_MAX_RESPONSE_LEN}"
+echo "    eval every: ${EVAL_INTERVAL}"
 echo "    mlflow exp: ${MLFLOW_EXPERIMENT_NAME}"
 echo "    mlflow run: ${MLFLOW_RUN_NAME}"
 echo "    stop job:   ${STOP_JOB_CMD}"
@@ -382,16 +395,16 @@ spec:
             --apply-chat-template \
             --rollout-shuffle \
             --rm-type math \
-            --num-rollout 100 \
-            --rollout-batch-size 16 \
-            --n-samples-per-prompt 8 \
-            --rollout-max-response-len 10240 \
+            --num-rollout ${NUM_ROLLOUT} \
+            --rollout-batch-size ${ROLLOUT_BATCH_SIZE} \
+            --n-samples-per-prompt ${N_SAMPLES_PER_PROMPT} \
+            --rollout-max-response-len ${ROLLOUT_MAX_RESPONSE_LEN} \
             --rollout-temperature 1 \
-            --global-batch-size 128 \
-            --eval-interval 10 \
+            --global-batch-size ${GLOBAL_BATCH_SIZE} \
+            --eval-interval ${EVAL_INTERVAL} \
             --eval-prompt-data gsm8k ${TEST_DATA} \
             --n-samples-per-eval-prompt 1 \
-            --eval-max-response-len 10240 \
+            --eval-max-response-len ${EVAL_MAX_RESPONSE_LEN} \
             --eval-top-k 1 \
             --skip-eval-before-train \
             --tensor-model-parallel-size 2 \
