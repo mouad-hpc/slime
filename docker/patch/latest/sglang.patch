@@ -1684,7 +1684,7 @@ index a9ff0ac94..c124f43bc 100644
 +        merged_error_message = " | ".join(dict.fromkeys(error_messages))
 +        if not merged_error_message:
 +            merged_error_message = (
-+                "One or more tensor-parallel ranks failed while updating the LoRA adapter."
++                "One or more tensor-parallel ranks failed while updating the LoRA adapter, gathered statuses for all TP workers: " + str(gathered_statuses)
 +            )
 +
 +        return LoadLoRAAdapterFromTensorsReqOutput(
