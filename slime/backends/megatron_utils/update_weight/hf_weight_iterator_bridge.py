@@ -1,5 +1,8 @@
 import dataclasses
+import logging
 
+import torch.distributed as dist
+from megatron.core import mpu
 
 from slime.utils import megatron_bridge_utils
 from slime.utils.misc import chunk_named_params_by_size
@@ -8,6 +11,8 @@ from ..megatron_to_hf import postprocess_hf_param
 from ..megatron_to_hf.processors import quantize_params
 from ..misc_utils import strip_param_name_prefix
 from .hf_weight_iterator_base import HfWeightIteratorBase
+
+logger = logging.getLogger(__name__)
 
 
 def _patch_bridge_expert_cache_to_cpu():
@@ -49,6 +54,37 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
     def get_hf_weight_chunks(self, megatron_local_weights):
         renamed_megatron_local_weights = {strip_param_name_prefix(k): v for k, v in megatron_local_weights.items()}
+
+        # --- DEBUG: dump Megatron param TP attributes before Bridge export ---
+        if dist.get_rank() == 0:
+            tp_size = mpu.get_tensor_model_parallel_world_size()
+            etp_size = mpu.get_expert_tensor_parallel_world_size()
+            ep_size = mpu.get_expert_model_parallel_world_size()
+            logger.info(
+                "[DEBUG] Bridge export: TP=%d, expert_TP=%d, EP=%d, is_lora=%s",
+                tp_size, etp_size, ep_size, self.is_lora,
+            )
+            for model_chunk in self.model:
+                for name, param in model_chunk.named_parameters():
+                    t_mp = getattr(param, "tensor_model_parallel", None)
+                    p_dim = getattr(param, "partition_dim", None)
+                    p_stride = getattr(param, "partition_stride", None)
+                    p_mode = getattr(param, "parallel_mode", None)
+                    is_expert = ".experts." in name
+                    flags = []
+                    if is_expert:
+                        flags.append(f"expert(etp={etp_size})")
+                    if "linear_fc2" in name:
+                        flags.append(f"fc2(partition_dim={p_dim})")
+                        if p_dim == 0:
+                            flags.append("WARN:partition_dim=0!")
+                    logger.info(
+                        "[DEBUG] param %-80s shape=%-25s tp=%s dim=%s stride=%s mode=%s %s",
+                        name, str(list(param.shape)), t_mp, p_dim, p_stride, p_mode,
+                        " ".join(flags),
+                    )
+        # --- END DEBUG ---
+
         with megatron_bridge_utils.patch_megatron_model(self.model):
             if self.is_lora:
                 named_weights = self._bridge.export_adapter_weights(
@@ -63,6 +99,22 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             def _streaming_quantized():
                 for hf_param_name, weight, megatron_param_name in named_weights:
+                    # --- DEBUG: log Bridge output shapes ---
+                    if dist.get_rank() == 0:
+                        is_expert = ".experts." in hf_param_name or ".experts." in (megatron_param_name or "")
+                        flags = []
+                        if is_expert:
+                            flags.append("expert")
+                        if "down_proj" in hf_param_name:
+                            flags.append("down_proj")
+                        if "lora_" in hf_param_name:
+                            flags.append("lora")
+                        logger.info(
+                            "[DEBUG] bridge_out hf=%-70s shape=%-20s megatron=%s %s",
+                            hf_param_name, str(list(weight.shape)), megatron_param_name,
+                            " ".join(flags),
+                        )
+                    # --- END DEBUG ---
                     processed_weight = postprocess_hf_param(
                         args=self.args,
                         megatron_param_name=megatron_param_name,

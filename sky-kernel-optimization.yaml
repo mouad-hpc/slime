@@ -1,0 +1,38 @@
+resources:
+  image_id: osmosisdocker/limes:latest
+  accelerators: H200:8
+  cloud: kubernetes
+
+setup: |
+  set -eux
+  cd /root
+  if [ ! -d slime ]; then
+    git clone https://github.com/mouad-hpc/slime.git
+  fi
+  cd slime
+  git remote set-url origin https://github.com/mouad-hpc/slime.git 2>/dev/null || true
+  git fetch origin mouad/fused-kernels
+  git checkout mouad/fused-kernels || git checkout -b mouad/fused-kernels origin/mouad/fused-kernels
+  git pull origin mouad/fused-kernels || true
+  pip install -e . 2>/dev/null || true
+
+run: |
+  set -eux
+  cd /root/slime
+  export PYTHONPATH=/root/Megatron-LM:${PYTHONPATH:-}
+
+  # Download model if needed
+  if [ ! -f /root/Qwen3.5-35B-A3B/config.json ]; then
+    echo "Downloading Qwen3.5-35B-A3B..."
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3.5-35B-A3B', local_dir='/root/Qwen3.5-35B-A3B')"
+  fi
+
+  # Prepare dataset if needed
+  if [ ! -f /root/gsm8k/train.parquet ] || ! python3 -c "import pandas as pd; df = pd.read_parquet('/root/gsm8k/train.parquet'); assert 'messages' in df.columns" 2>/dev/null; then
+    echo "Preparing gsm8k (chat format)..."
+    rm -f /root/gsm8k/train.parquet /root/gsm8k/test.parquet
+    python3 examples/lora/prep_gsm8k.py
+  fi
+
+  echo "=== Pod ready for benchmarking ==="
+  sleep infinity

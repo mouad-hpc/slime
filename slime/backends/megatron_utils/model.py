@@ -18,7 +18,7 @@ from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
-from megatron.core.utils import get_model_config
+from megatron.core.utils import get_attr_wrapped_model, get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
@@ -27,6 +27,11 @@ from slime.utils.memory_utils import clear_memory
 
 from .bridge_lora_helpers import _ensure_model_list, _setup_lora_model_via_bridge
 from .checkpoint import load_checkpoint, save_checkpoint, save_checkpoint_with_lora
+from .chunked_tp_logprob import (
+    patch_output_layer_for_hidden_state_bypass,
+    should_enable_chunked_tp_logprob,
+    validate_chunked_tp_logprob_config,
+)
 from .data import DataIterator, get_batch
 from .lora_utils import is_lora_enabled, is_lora_model, save_lora_checkpoint
 from .loss import loss_function
@@ -113,6 +118,24 @@ def setup_model_and_optimizer(
         model = get_model(
             wrap_model_provider_with_freeze(get_model_provider_func(args, role), args), ModelType.encoder_or_decoder
         )
+
+    if should_enable_chunked_tp_logprob(args, role):
+        validate_chunked_tp_logprob_config(args)
+        patched_output_layers = 0
+        for model_chunk in _ensure_model_list(model):
+            output_layer = get_attr_wrapped_model(model_chunk, "output_layer", allow_none=True)
+            if output_layer is None:
+                continue
+            patched_output_layers += int(patch_output_layer_for_hidden_state_bypass(output_layer))
+        if patched_output_layers == 0 and mpu.is_pipeline_last_stage(ignore_virtual=True):
+            raise RuntimeError(
+                "Requested --use-chunked-tp-logprob-loss, but no actor output_layer was found on this rank."
+            )
+        if patched_output_layers > 0:
+            logger.info(
+                "Enabled chunked TP logprob hidden-state bypass on %s output layer chunk(s).",
+                patched_output_layers,
+            )
 
     # Optimizer
     kwargs = {}
@@ -247,6 +270,7 @@ def forward_only(
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
             max_seq_lens=batch.get("max_seq_lens", None),
+            output_layer=getattr(model, "output_layer", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -418,7 +442,13 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, batch, num_microbatches)
+        return output_tensor, partial(
+            loss_function,
+            args,
+            batch,
+            num_microbatches,
+            output_layer=getattr(model, "output_layer", None),
+        )
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()

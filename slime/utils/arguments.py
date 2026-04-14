@@ -172,6 +172,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
             )
             parser.add_argument(
+                "--use-chunked-tp-logprob-loss",
+                action="store_true",
+                default=False,
+                help=(
+                    "Phase-1 hidden-state logprob path for actor training. "
+                    "Bypasses full logits materialization on the last pipeline stage and computes TP-aware "
+                    "logprobs/loss from hidden states in sequence chunks."
+                ),
+            )
+            parser.add_argument(
+                "--chunked-tp-logprob-seq-chunk-size",
+                type=int,
+                default=512,
+                help=(
+                    "Sequence chunk size for --use-chunked-tp-logprob-loss. "
+                    "Each chunk runs the local TP output layer and TP-aware logprob computation once."
+                ),
+            )
+            parser.add_argument(
                 "--only-train-params-name-list",
                 type=str,
                 nargs="*",

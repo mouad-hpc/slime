@@ -28,12 +28,14 @@ def _gather_with_stride(
 
 def _check_and_fix_partition(args: Namespace, name: str, partition_stride: int, partition_dim: int) -> tuple[int, int]:
     """Validate partition_stride values for known parameter patterns."""
+    orig_dim = partition_dim
     if "linear_fc1.weight" in name and args.swiglu:
         partition_stride = 2
     elif "linear_fc2.weight" in name:
         assert partition_stride == 1, f"Expected partition_stride=1 for {name}, got {partition_stride}"
         if partition_dim == 0:
             partition_dim = 1
+            logger.info("[DEBUG] _check_and_fix_partition: %s partition_dim %d -> %d", name, orig_dim, partition_dim)
     else:
         assert partition_stride == 1, f"Expected partition_stride=1 for {name}, got {partition_stride}"
     return partition_stride, partition_dim
@@ -81,7 +83,29 @@ def all_gather_params_async(
     gather_tasks = []
     handles = []
 
+    rank = dist.get_rank()
     for info, param in param_infos_and_params:
+        # --- DEBUG: log TP attributes on rank 0 ---
+        if rank == 0:
+            t_mp = getattr(param, "tensor_model_parallel", None)
+            p_dim = getattr(param, "partition_dim", None)
+            p_stride = getattr(param, "partition_stride", None)
+            p_mode = getattr(param, "parallel_mode", None)
+            is_expert = ".experts." in info.name
+            etp = mpu.get_expert_tensor_parallel_world_size() if is_expert else None
+            rtp = mpu.get_tensor_model_parallel_world_size()
+            flags = []
+            if is_expert:
+                flags.append(f"expert(etp={etp},rtp={rtp})")
+            if "linear_fc2" in info.name:
+                flags.append(f"fc2(partition_dim={p_dim})")
+            logger.info(
+                "[DEBUG] all_gather %-80s shape=%-25s tp=%s dim=%s stride=%s mode=%s %s",
+                info.name, str(list(param.shape)), t_mp, p_dim, p_stride, p_mode,
+                " ".join(flags),
+            )
+        # --- END DEBUG ---
+
         # Prepare async all_gather
         if "expert_bias" in info.name:
             gather_tasks.append((info, param, None, None, None, None))
