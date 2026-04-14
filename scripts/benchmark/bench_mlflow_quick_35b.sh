@@ -81,11 +81,11 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type math
    --num-rollout "${NUM_ROLLOUT}"
-   --rollout-batch-size 5
+   --rollout-batch-size 4
    --n-samples-per-prompt 2
    --rollout-max-response-len 512
    --rollout-temperature 1
-   --global-batch-size 10
+   --global-batch-size 8
 )
 
 EVAL_ARGS=(
