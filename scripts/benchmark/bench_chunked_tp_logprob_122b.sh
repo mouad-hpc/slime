@@ -1,20 +1,23 @@
 #!/bin/bash
 # Benchmark: baseline vs chunked TP logprob on Qwen3.5-122B-A10B.
 #
-# A/B comparison at 4K context length on single-node 8xH200.
+# A/B comparison at configurable context length on single-node 8xH200.
 # Each variant runs 10 training steps with identical config.
 #
 # Usage:
 #   bash scripts/benchmark/bench_chunked_tp_logprob_122b.sh
 #   NUM_ROLLOUT=10 MAX_TRAINING_STEPS=5 bash scripts/benchmark/bench_chunked_tp_logprob_122b.sh
+#   ROLLOUT_MAX_RESPONSE_LEN=16384 RUN_FUSED_SELECTED_VARIANT=1 bash scripts/benchmark/bench_chunked_tp_logprob_122b.sh
 
 set -euo pipefail
 set -x
 
-NUM_ROLLOUT="${NUM_ROLLOUT:-40}"
+NUM_ROLLOUT="${NUM_ROLLOUT:-10}"
 MAX_TRAINING_STEPS="${MAX_TRAINING_STEPS:-10}"
 SEQ_CHUNK_SIZE="${SEQ_CHUNK_SIZE:-512}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
+ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-4096}"
+RUN_FUSED_SELECTED_VARIANT="${RUN_FUSED_SELECTED_VARIANT:-0}"
 
 cleanup() {
     pkill -9 sglang 2>/dev/null || true
@@ -75,9 +78,9 @@ ROLLOUT_ARGS=(
    --num-rollout "${NUM_ROLLOUT}"
    --rollout-batch-size 8
    --n-samples-per-prompt 4
-   --rollout-max-response-len 4096
+   --rollout-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
    --rollout-temperature 1
-   --global-batch-size 64
+   --global-batch-size 32
 )
 
 PERF_ARGS=(
@@ -193,13 +196,20 @@ run_variant() {
 }
 
 run_variant "baseline" \
-    --mlflow-run-name 122b-baseline-4k-lora \
+    --mlflow-run-name "122b-baseline-${ROLLOUT_MAX_RESPONSE_LEN}-lora" \
     --log-probs-chunk-size 4096
 
 run_variant "chunked_seq${SEQ_CHUNK_SIZE}" \
-    --mlflow-run-name 122b-chunked-4k-lora \
+    --mlflow-run-name "122b-chunked-${ROLLOUT_MAX_RESPONSE_LEN}-lora" \
     --use-chunked-tp-logprob-loss \
     --chunked-tp-logprob-seq-chunk-size "${SEQ_CHUNK_SIZE}"
+if [ "${RUN_FUSED_SELECTED_VARIANT}" = "1" ]; then
+    run_variant "fused_seq${SEQ_CHUNK_SIZE}" \
+        --mlflow-run-name "122b-fused-${ROLLOUT_MAX_RESPONSE_LEN}-lora" \
+        --use-chunked-tp-logprob-loss \
+        --chunked-tp-logprob-seq-chunk-size "${SEQ_CHUNK_SIZE}" \
+        --use-fused-selected-tp-logprob
+fi
 
 echo ""
 echo "========================================"
@@ -211,3 +221,8 @@ for label in baseline "chunked_seq${SEQ_CHUNK_SIZE}"; do
     echo "--- ${label} ---"
     grep -E "actor_train_time|log_probs_time|train_wait_time|sleep_time|wake_up_time|update_weights_time|tflops|peak_gb|tok_per_s" "/tmp/bench_chunked_tp_122b_${label}.log" || true
 done
+if [ "${RUN_FUSED_SELECTED_VARIANT}" = "1" ]; then
+    echo ""
+    echo "--- fused_seq${SEQ_CHUNK_SIZE} ---"
+    grep -E "actor_train_time|log_probs_time|train_wait_time|sleep_time|wake_up_time|update_weights_time|tflops|peak_gb|tok_per_s" "/tmp/bench_chunked_tp_122b_fused_seq${SEQ_CHUNK_SIZE}.log" || true
+fi
