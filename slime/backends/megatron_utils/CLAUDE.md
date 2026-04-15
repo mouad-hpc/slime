@@ -118,106 +118,90 @@ For Qwen3.5-35B GateUpProj backward:
 
 ---
 
-## Optimization Roadmap: 4 Benchmark Variants
+## E2E Benchmark Post-Mortem (2026-04-10)
 
-### V0 — Baseline (current miles port)
-The current implementation, byte-identical to miles' FSDP kernels. Static block config, atomic writes every K-iteration, fresh zero-filled grad buffers each call, SiLU backward as separate PyTorch op.
+### Result: No measurable speedup at EP=8
 
-### V1 — Expert-Parallel Grid + Buffer Reuse
-**Target: backward_weight (44%) + grad init (4%)**
+Benchmark: FFT (no LoRA), TP=2, EP=8, GBS=128, MBS=1, Qwen3.5-35B-A3B, 8xH200.
 
-Replace the current grid `(num_M_blocks * num_N_blocks,)` where multiple M-blocks contend on the same expert with an expert-parallel grid `(num_experts * num_N_blocks,)` where each block owns ALL tokens for one expert.
+| Config | Steps | Mean actor_train_time | Median |
+|--------|-------|----------------------|--------|
+| Fused (V0 kernel) | 41 | 75.3s | 75.2s |
+| No-fused (autograd) | 6 | 74.3s | 74.4s |
 
-| | V0 (current) | V1 (expert-parallel) |
-|--|--------------|---------------------|
-| Grid size | 8192 blocks | 256 experts × 16 N-blocks = 4096 |
-| Atomics per block | 64 (one per K-iter) | **0** (sole owner, use `tl.store`) |
-| Contention | 2 blocks/expert | None |
+**Difference: within noise (< 1.5%)**
 
-Each block iterates over all M-blocks for its expert sequentially, accumulating in registers. Then one `tl.store` instead of `tl.atomic_add`. Also pre-allocate grad buffers once and reuse across calls instead of `torch.zeros_like` every backward.
+### Why: Expert backward is <0.5% of step time
 
-### V2 — V1 + Fused SiLU Backward
-**Target: SiluAndMul backward (4%) + one tensor read/write elimination**
+MoE expert backward = 9.4ms/layer × 40 layers = **376ms** per step.
+Total `actor_train_time` = **75,000ms**. Expert backward = **0.5%**.
 
-Fuse the SiLU backward computation into the GateUpProj backward kernel. Currently SiluAndMulFunction.backward reads `intermediate_cache1`, computes `dsilu * x2`, writes `grad_input`. Then GateUpProj backward reads this as `grad_output`. Fusing eliminates the intermediate tensor write+read.
+Even a 9x kernel-level speedup saves only ~334ms = 0.45% of step time.
 
-Adds `~20 lines` of SiLU derivative logic inside `backward_input_kernel` and `backward_weight_kernel` (read `intermediate_cache1` directly, apply SiLU derivative before the matmul).
+### Root cause: The kernel is for FSDP determinism, not Megatron EP>1 performance
 
-### V3 — V2 + Autotune (block sizes, num_warps, num_stages)
-**Target: all kernels**
+1. Miles' `StandardDispatcher` hardcodes `moe_ep_size = 1` — all experts local to one GPU
+2. The kernel exists for **bit-exact deterministic** gradients needed by R3 routing replay
+3. With EP=8, each rank handles only 32 local experts (256/8) — expert GEMMs are tiny
+4. Megatron's alltoall dispatcher + TEGroupedMLP handles EP>1; the fused kernel is redundant there
 
-Replace static `DEFAULT_CONFIG` with `@triton.autotune` on all 3 backward kernels. Configs to sweep:
+### Decision: Do NOT merge fused MoE changes into main
 
-```python
-@triton.autotune(
-    configs=[
-        # (M, N, K, GROUP_M, num_warps, num_stages)
-        triton.Config({"BLOCK_SIZE_M": 32,  "BLOCK_SIZE_N": 64,  "BLOCK_SIZE_K": 64,  "GROUP_SIZE_M": 8}, num_warps=4, num_stages=2),
-        triton.Config({"BLOCK_SIZE_M": 64,  "BLOCK_SIZE_N": 64,  "BLOCK_SIZE_K": 32,  "GROUP_SIZE_M": 8}, num_warps=4, num_stages=2),
-        triton.Config({"BLOCK_SIZE_M": 64,  "BLOCK_SIZE_N": 64,  "BLOCK_SIZE_K": 64,  "GROUP_SIZE_M": 8}, num_warps=4, num_stages=3),
-        triton.Config({"BLOCK_SIZE_M": 64,  "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32,  "GROUP_SIZE_M": 8}, num_warps=8, num_stages=2),
-        triton.Config({"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64,  "BLOCK_SIZE_K": 32,  "GROUP_SIZE_M": 8}, num_warps=8, num_stages=3),
-        triton.Config({"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32,  "GROUP_SIZE_M": 8}, num_warps=8, num_stages=4),
-        # High-warp configs for memory-bound kernels
-        triton.Config({"BLOCK_SIZE_M": 64,  "BLOCK_SIZE_N": 64,  "BLOCK_SIZE_K": 32,  "GROUP_SIZE_M": 8}, num_warps=8, num_stages=4),
-        triton.Config({"BLOCK_SIZE_M": 64,  "BLOCK_SIZE_N": 64,  "BLOCK_SIZE_K": 32,  "GROUP_SIZE_M": 8}, num_warps=16, num_stages=2),
-    ],
-    key=["N", "K"],
-)
-```
+The code is correct and works at any EP size, but adds complexity with zero measurable e2e benefit for the Megatron backend. Keep on `mouad/fused-kernels` branch as reference.
 
-Key tuning parameters:
-- **`num_warps`**: More warps = more outstanding memory requests = better latency hiding. Default 4, try 8/16 for memory-bound kernels.
-- **`num_stages`**: Software pipelining depth for loads. More stages = more prefetching overlap. Default 2, try 3-4 on H200's larger SMEM.
-- **Block sizes**: Larger blocks reduce atomic frequency but increase register pressure. Trade-off depends on expert GEMM dimensions.
+### Training step breakdown (FFT, EP=8, Qwen3.5-35B)
+
+| Component | Time (s) | % of step |
+|-----------|----------|-----------|
+| train_wait (rollout idle) | 63s | 39% |
+| actor_train (fwd+bwd+opt) | 75s | 46% |
+| log_probs (fwd-only) | 24s | 15% |
+| sleep (offload to CPU) | 20s | — |
+| update_weights (sync to SGLang) | 12s | — |
+| wake_up (restore from CPU) | 7s | — |
+
+The real bottlenecks are: rollout pipeline scheduling, forward/backward through attention + GDN/Mamba layers, log-probs recomputation, and colocate offload overhead.
 
 ---
 
-## Benchmark Matrix
+## MoE Routing And Packing Priorities
 
-### Kernel-Level Microbenchmark (`tools/profile_fused_moe.py`)
+### What To Benchmark Before New Triton
 
-| Variant | 35B shapes | 122B shapes |
-|---------|-----------|-------------|
-| | H=2048, FFN=512, E=256, K=8 | H=3072, FFN=1024, E=256, K=8 |
-| V0: Baseline | ✓ | ✓ |
-| V1: Expert-parallel + buffer reuse | ✓ | ✓ |
-| V2: V1 + fused SiLU bwd | ✓ | ✓ |
-| V3: V2 + autotune | ✓ | ✓ |
+For the production-style Qwen3.5-35B-A3B recipe, the next low-risk wins are
+outside the current fused backward kernels:
 
-Token counts to sweep: 512, 1024, 2048, 4096, 8192.
+1. **Dispatcher A/B**
+   - Compare `--moe-token-dispatcher-type alltoall` against
+     `--moe-token-dispatcher-type flex --moe-enable-deepep`
+   - Focus on `actor_train_time`, `train_wait_time`, and any DeepEP-heavy trace
+     regions rather than isolated expert GEMM timings
 
-### Full Training Benchmark (Ray job, 8xH200)
+2. **Dynamic batching**
+   - Test `--use-dynamic-batch-size` with `--max-tokens-per-gpu`
+   - Pair it with `--log-probs-max-tokens-per-gpu` so the log-prob path is not
+     pinned to the static training limit
 
-| Config | LoRA (attn-only) | LoRA (all-linear) | Non-LoRA |
-|--------|-----------------|-------------------|----------|
-| 35B + V0 | fused MoE ON | fused MoE OFF (fallback) | fused MoE ON |
-| 35B + V3 | fused MoE ON | fused MoE OFF (fallback) | fused MoE ON |
-| 122B + V0 | fused MoE ON | N/A (multi-node) | fused MoE ON |
-| 122B + V3 | fused MoE ON | N/A (multi-node) | fused MoE ON |
+3. **CP-specific path**
+   - Only benchmark `--allgather-cp` when `context_parallel_size > 1`
+   - This is a layout choice, not a universal improvement for CP=1 runs
 
-Metrics: `actor_train_time`, `tflops`, `peak_gb` per step.
+Reference harness:
+- `scripts/benchmark/bench_moe_dispatcher_and_packing_35b.sh`
 
----
+### If Another Triton Kernel Is Still Needed
 
-## LoRA Compatibility
+Do not spend the next cycle on another expert-weight backward rewrite. The more
+plausible kernel targets are:
 
-### Current State
-- `_has_expert_lora_params()` in `fused_moe_integration.py` checks for `lora_` or `.adapter.` params on expert modules
-- If found: **raises RuntimeError** (line 86-88) — crashes, does not skip
-- `--target-modules "all-linear"` INCLUDES expert weights → crashes with `--use-fused-moe-backward`
+- input-grad accumulation, which still uses atomics
+- routing/top-k preprocessing around `moe_align_block_size`
+- routing-weight gradient work
+- EP>1 scheduling and communication-adjacent hotspots that do not show up in a
+  single-expert microbenchmark
 
-### Workaround for Benchmarking
-Use `--target-modules` that excludes experts:
-```bash
---target-modules "qkv_proj,o_proj,gate_proj,up_proj,down_proj"  # attention + dense MLP only
-```
-This keeps LoRA on all non-expert linears while allowing fused MoE on expert layers.
-
-### Proper Fix (TODO)
-Change `_has_expert_lora_params` from raising to graceful handling:
-1. **Option A (skip)**: Log warning, don't patch that module, fall back to standard autograd for LoRA'd experts
-2. **Option B (merge)**: Merge LoRA weights into base before stacking: `W_merged = W_base + lora_B @ lora_A * scaling`. Stack merged weights. Gradients flow through LoRA params via the merge op. This is the correct long-term fix — enables fused MoE backward even with LoRA on expert weights.
+The decision rule is simple: if dispatcher, log-prob, offload, or rollout
+waiting still dominate, stay out of `kernels/` for now.
 
 ---
 
