@@ -17,6 +17,7 @@ CHUNK_SIZES="${CHUNK_SIZES:-512}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-4096}"
 RUN_FUSED_SELECTED_VARIANT="${RUN_FUSED_SELECTED_VARIANT:-0}"
+FUSED_ONLY="${FUSED_ONLY:-0}"
 
 cleanup() {
     pkill -9 sglang 2>/dev/null || true
@@ -169,6 +170,7 @@ run_variant() {
     ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${GPUS_PER_NODE}" \
         --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
+    set +e
     ray job submit --address="http://127.0.0.1:8265" \
         --runtime-env-json="${RUNTIME_ENV_JSON}" \
         -- python3 train.py \
@@ -188,6 +190,12 @@ run_variant() {
         "${MISC_ARGS[@]}" \
         "$@" \
         2>&1 | tee "${logfile}"
+    local rc=$?
+    set -e
+
+    if [ $rc -ne 0 ]; then
+        echo "WARNING: ${label} failed (exit code $rc), moving to next variant"
+    fi
 
     ray stop --force
     sleep 5
@@ -200,10 +208,12 @@ if [ "${SKIP_BASELINE:-0}" != "1" ]; then
 fi
 
 for cs in ${CHUNK_SIZES}; do
-    run_variant "chunked_seq${cs}" \
-        --mlflow-run-name "122b-chunked${cs}-${ROLLOUT_MAX_RESPONSE_LEN}-lora" \
-        --use-chunked-tp-logprob-loss \
-        --chunked-tp-logprob-seq-chunk-size "${cs}"
+    if [ "${FUSED_ONLY}" != "1" ]; then
+        run_variant "chunked_seq${cs}" \
+            --mlflow-run-name "122b-chunked${cs}-${ROLLOUT_MAX_RESPONSE_LEN}-lora" \
+            --use-chunked-tp-logprob-loss \
+            --chunked-tp-logprob-seq-chunk-size "${cs}"
+    fi
     if [ "${RUN_FUSED_SELECTED_VARIANT}" = "1" ]; then
         run_variant "fused_seq${cs}" \
             --mlflow-run-name "122b-fused${cs}-${ROLLOUT_MAX_RESPONSE_LEN}-lora" \

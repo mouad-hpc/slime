@@ -26,8 +26,10 @@ from slime.utils.types import RolloutBatch
 
 from .chunked_tp_logprob import (
     call_output_layer_linear,
+    compute_fused_selected_tp_logprob,
     gather_hidden_states_for_output_layer,
     output_layer_uses_hidden_state_bypass,
+    should_use_fused_selected_tp_logprob,
 )
 from .cp_utils import (
     all_gather_with_cp,
@@ -430,21 +432,37 @@ def _get_log_probs_and_entropy_from_hidden_states(
     for start in range(0, T, seq_chunk_size):
         end = min(start + seq_chunk_size, T)
         hidden_chunk = hidden_states[start:end]
-        logits_chunk = call_output_layer_linear(output_layer, hidden_chunk)
-        logits_chunk = logits_chunk.float().contiguous()
-        if logits_chunk.dim() != 2:
-            logits_chunk = logits_chunk.view(-1, logits_chunk.size(-1))
-        if rollout_temperature != 1.0:
-            logits_chunk = logits_chunk / rollout_temperature
-
-        log_prob_chunk, entropy_chunk = calculate_log_probs_and_entropy(
-            logits_chunk,
-            full_tokens[start:end],
-            tp_group,
+        tokens_chunk = full_tokens[start:end]
+        if should_use_fused_selected_tp_logprob(
+            args,
+            output_layer,
             with_entropy=with_entropy,
-            chunk_size=-1,
             need_entropy_grad=need_entropy_grad,
-        )
+        ):
+            log_prob_chunk, entropy_chunk = compute_fused_selected_tp_logprob(
+                hidden_chunk,
+                tokens_chunk,
+                output_layer=output_layer,
+                tp_group=tp_group,
+                rollout_temperature=rollout_temperature,
+                with_entropy=with_entropy,
+            )
+        else:
+            logits_chunk = call_output_layer_linear(output_layer, hidden_chunk)
+            logits_chunk = logits_chunk.float().contiguous()
+            if logits_chunk.dim() != 2:
+                logits_chunk = logits_chunk.view(-1, logits_chunk.size(-1))
+            if rollout_temperature != 1.0:
+                logits_chunk = logits_chunk / rollout_temperature
+
+            log_prob_chunk, entropy_chunk = calculate_log_probs_and_entropy(
+                logits_chunk,
+                tokens_chunk,
+                tp_group,
+                with_entropy=with_entropy,
+                chunk_size=-1,
+                need_entropy_grad=need_entropy_grad,
+            )
         log_prob_chunks.append(log_prob_chunk.reshape(-1))
         if with_entropy and entropy_chunk is not None:
             entropy_chunks.append(entropy_chunk.reshape(-1))

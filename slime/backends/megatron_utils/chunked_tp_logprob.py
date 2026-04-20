@@ -15,10 +15,16 @@ _HAS_WEIGHT_ATTR = "_slime_chunked_tp_has_weight_arg"
 
 
 def should_enable_chunked_tp_logprob(args: Namespace, role: str) -> bool:
-    return role == "actor" and getattr(args, "use_chunked_tp_logprob_loss", False)
+    return role == "actor" and (
+        getattr(args, "use_chunked_tp_logprob_loss", False) or getattr(args, "use_fused_selected_tp_logprob", False)
+    )
 
 
 def validate_chunked_tp_logprob_config(args: Namespace) -> None:
+    if getattr(args, "use_fused_selected_tp_logprob", False) and not getattr(
+        args, "use_chunked_tp_logprob_loss", False
+    ):
+        raise ValueError("--use-fused-selected-tp-logprob requires --use-chunked-tp-logprob-loss.")
     if getattr(args, "qkv_format", None) != "bshd":
         raise ValueError(
             "--use-chunked-tp-logprob-loss currently supports only --qkv-format bshd. "
@@ -40,6 +46,24 @@ def validate_chunked_tp_logprob_config(args: Namespace) -> None:
 
 def output_layer_uses_hidden_state_bypass(output_layer: torch.nn.Module | None) -> bool:
     return bool(output_layer is not None and getattr(output_layer, _BYPASS_ENABLED_ATTR, False))
+
+
+def should_use_fused_selected_tp_logprob(
+    args: Namespace,
+    output_layer: torch.nn.Module | None,
+    *,
+    with_entropy: bool,
+    need_entropy_grad: bool,
+) -> bool:
+    del with_entropy
+    return bool(
+        getattr(args, "use_fused_selected_tp_logprob", False)
+        and output_layer_uses_hidden_state_bypass(output_layer)
+        and output_layer is not None
+        and hasattr(output_layer, "weight")
+        and output_layer.weight is not None
+        and not need_entropy_grad
+    )
 
 
 def patch_output_layer_for_hidden_state_bypass(output_layer: torch.nn.Module) -> bool:
@@ -81,6 +105,38 @@ def gather_hidden_states_for_output_layer(
         tensor_parallel_output_grad=False,
     )
     return hidden_states.transpose(0, 1).contiguous()
+
+
+def _load_fused_selected_tp_logprob_impl():
+    from .kernels.selected_tp_logprob_triton import fused_selected_tp_logprob
+
+    return fused_selected_tp_logprob
+
+
+def compute_fused_selected_tp_logprob(
+    hidden_states: torch.Tensor,
+    tokens: torch.Tensor,
+    *,
+    output_layer: torch.nn.Module,
+    tp_group,
+    rollout_temperature: float,
+    with_entropy: bool,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    if not hasattr(output_layer, "weight") or output_layer.weight is None:
+        raise ValueError("Fused selected TP logprob requires output_layer.weight.")
+
+    hidden_states = hidden_states.to(output_layer.weight.dtype)
+    bias = getattr(output_layer, "bias", None)
+    fused_impl = _load_fused_selected_tp_logprob_impl()
+    return fused_impl(
+        hidden_states=hidden_states,
+        weight=output_layer.weight,
+        bias=bias,
+        tokens=tokens,
+        tp_group=tp_group,
+        rollout_temperature=rollout_temperature,
+        with_entropy=with_entropy,
+    )
 
 
 def call_output_layer_linear(output_layer: torch.nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:

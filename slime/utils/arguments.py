@@ -184,10 +184,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--chunked-tp-logprob-seq-chunk-size",
                 type=int,
-                default=512,
+                default=256,
                 help=(
                     "Sequence chunk size for --use-chunked-tp-logprob-loss. "
                     "Each chunk runs the local TP output layer and TP-aware logprob computation once."
+                ),
+            )
+            parser.add_argument(
+                "--use-fused-selected-tp-logprob",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use the v2 fused actor fast path inside --use-chunked-tp-logprob-loss. "
+                    "This avoids local logits materialization for selected-token logprob computation "
+                    "and falls back to the phase-1 chunked path when unsupported."
                 ),
             )
             parser.add_argument(
